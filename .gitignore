@@ -1,0 +1,15 @@
+# Nix
+result
+result-*
+
+# node
+/node_modules/
+
+# shadow-cljs / ClojureScript build artifacts
+/public/js/
+/public/css/
+.shadow-cljs/
+/out/
+/.cpcache/
+target/
+.nrepl-port
