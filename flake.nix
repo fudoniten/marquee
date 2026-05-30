@@ -21,7 +21,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, clj-nix, nix-helpers }:
+  outputs = { self, nixpkgs, flake-utils, clj-nix, nix-helpers, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages."${system}";
