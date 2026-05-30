@@ -1,0 +1,11 @@
+# Nix
+result
+result-*
+
+# ClojureScript / Clojure build artifacts
+/out/
+/public/js/
+.cpcache/
+target/
+.lein/
+.nrepl-port
