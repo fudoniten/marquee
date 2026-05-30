@@ -1,7 +1,22 @@
-(ns marquee.core)
+(ns marquee.core
+  (:require [reagent.dom.client :as rdc]
+            [re-frame.core :as rf]
+            [marquee.events :as events]
+            [marquee.views :as views]))
 
-(defn render! []
-  (set! (.. js/document -body -innerHTML) "<h1>Hello, World!</h1>"))
+(defonce root (atom nil))
 
-;; Run on page load.
-(render!)
+(defn mount! []
+  (let [el (.getElementById js/document "app")]
+    (when (nil? @root)
+      (reset! root (rdc/create-root el)))
+    (rdc/render @root [views/app])))
+
+(defn ^:export init []
+  (rf/dispatch-sync [::events/initialize-db])
+  (mount!))
+
+;; Called by shadow-cljs after each hot reload.
+(defn ^:dev/after-load reload! []
+  (rf/clear-subscription-cache!)
+  (mount!))

@@ -2,10 +2,14 @@
 result
 result-*
 
-# ClojureScript / Clojure build artifacts
-/out/
+# node
+/node_modules/
+
+# shadow-cljs / ClojureScript build artifacts
 /public/js/
-.cpcache/
+/public/css/
+.shadow-cljs/
+/out/
+/.cpcache/
 target/
-.lein/
 .nrepl-port

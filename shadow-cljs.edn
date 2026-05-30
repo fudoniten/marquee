@@ -1,0 +1,12 @@
+;; shadow-cljs reads dependencies from deps.edn (`:deps true`), so the Maven
+;; coordinates live there and npm packages live in package.json.
+{:deps true
+
+ :dev-http {8080 "public"}
+
+ :builds
+ {:app {:target     :browser
+        :output-dir "public/js"
+        :asset-path "/js"
+        :modules    {:main {:init-fn marquee.core/init}}
+        :devtools   {:watch-dir "public"}}}}
