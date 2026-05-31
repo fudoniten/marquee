@@ -117,6 +117,19 @@
           '';
         };
 
+        # `nix run .#dev-server` -> run shadow-cljs watch for development.
+        dev-server = pkgs.writeShellApplication {
+          name = "dev-server";
+          runtimeInputs = [ clojure jdk nodejs ];
+          text = ''
+            cd "''${1:-$PWD}"
+            PORT="''${PORT:-8080}"
+            echo "Starting shadow-cljs dev server on http://localhost:$PORT"
+            echo "Press Ctrl+C to stop."
+            npx shadow-cljs watch app
+          '';
+        };
+
       in {
         packages.default = site;
         packages.site = site;
@@ -128,6 +141,10 @@
         apps.update = {
           type = "app";
           program = "${update}/bin/update";
+        };
+        apps.dev-server = {
+          type = "app";
+          program = "${dev-server}/bin/dev-server";
         };
 
         devShells.default = pkgs.mkShell {
