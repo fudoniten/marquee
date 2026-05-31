@@ -1,6 +1,7 @@
 (ns marquee.core
   (:require [reagent.dom.client :as rdc]
             [re-frame.core :as rf]
+            [marquee.api :as api]
             [marquee.events :as events]
             [marquee.views :as views]))
 
@@ -13,6 +14,7 @@
     (rdc/render @root [views/app])))
 
 (defn ^:export init []
+  (api/bootstrap!)
   (rf/dispatch-sync [::events/initialize-db])
   (mount!))
 
