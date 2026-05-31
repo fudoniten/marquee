@@ -19,7 +19,7 @@
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 
-(defn bootstrap! [config]
+(defn bootstrap! []
 
   ;; Add one martian/init call per OpenAPI-enabled backend service.
   ;;
