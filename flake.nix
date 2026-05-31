@@ -126,6 +126,12 @@
             PORT="''${PORT:-8080}"
             echo "Starting shadow-cljs dev server on http://localhost:$PORT"
             echo "Press Ctrl+C to stop."
+
+            # Link Nix-managed node_modules so shadow-cljs can find react etc.
+            if [ ! -e node_modules ]; then
+              ln -s ${node-modules}/node_modules node_modules
+            fi
+
             npx shadow-cljs watch app
           '';
         };

@@ -2,6 +2,8 @@
 ;; coordinates live there and npm packages live in package.json.
 {:deps true
 
+ :nrepl {:port 7002}
+
  :dev-http {8080 "public"}
 
  :builds
