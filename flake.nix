@@ -132,6 +132,16 @@
               ln -s ${node-modules}/node_modules node_modules
             fi
 
+            mkdir -p public/css
+
+            # Run Tailwind in watch mode alongside shadow-cljs; kill both on exit.
+            trap 'kill $(jobs -p) 2>/dev/null' EXIT
+            ./node_modules/.bin/tailwindcss \
+              -c tailwind.config.js \
+              -i src/css/main.css \
+              -o public/css/main.css \
+              --watch &
+
             npx shadow-cljs watch app
           '';
         };
