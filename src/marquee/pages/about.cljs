@@ -20,7 +20,8 @@
       [:li "re-frame for state and a tiny page router"]
       [:li "Tailwind CSS with shadcn/ui design tokens"]
       [:li "shadcn-styled Button and Card as Reagent components"]
-      [:li "shadow-cljs for the build"]]]]
+      [:li "shadow-cljs for the build"]
+      [:li "neato other stuff"]]]]
    [button {:variant :outline
             :on-click #(rf/dispatch [::events/navigate :home])}
     "Back to Home"]])

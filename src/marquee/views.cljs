@@ -7,7 +7,7 @@
             [marquee.pages.about :as about]))
 
 (def pages
-  {:home {:label "Home"  :view home/page}
+  {:home  {:label "Home"  :view home/page}
    :about {:label "About" :view about/page}})
 
 (defn navbar []
