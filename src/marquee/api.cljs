@@ -1,5 +1,19 @@
 (ns marquee.api
-  (:require [martian.re-frame :as martian]))
+  (:require [clojure.string :as str]
+            [martian.re-frame :as martian])
+  (:import [java.net URI]))
+
+(defn append-url-path
+  [url path]
+  (let [u (js/URL. url)
+        base-path (.-pathname u)
+        extra-path (str path)
+        joined-path (str
+                     (str/replace base-path #"/+$" "")
+                     "/"
+                     (str/replace extra-path #"^/+" ""))]
+    (set! (.-pathname u) joined-path)
+    (.toString u)))
 
 ;; Call bootstrap! once at app startup. It fetches each service's OpenAPI spec
 ;; and registers martian's re-frame handlers for that service.
@@ -19,16 +33,13 @@
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 
-(defn bootstrap! []
-
-  ;; Add one martian/init call per OpenAPI-enabled backend service.
-  ;;
-  ;; Single service:
-  ;;   (martian/init "/openapi.json")
-  ;;
-  ;; Multiple services (use ::martian/instance-id to distinguish them):
-  ;;   (martian/init "https://service-a.example.com/openapi.json"
-  ;;                 {::martian/instance-id :service-a})
-  ;;   (martian/init "https://service-b.example.com/openapi.json"
-  ;;                 {::martian/instance-id :service-b})
-  )
+(defn bootstrap! [{:keys [::config/pseudovision ::config/tunarr-scheduler ::config/tunabrain]}]
+  (let [{url :url} pseudovision]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :pseudovision}))
+  (let [{url :url} tunarr-scheduler]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :tunarr-scheduler}))
+  (let [{url :url} tunabrain]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :tunabrain})))
