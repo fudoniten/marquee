@@ -21,10 +21,17 @@
                 :on-click #(rf/dispatch [::events/navigate page])}
         label])]))
 
+(defn loading []
+  [:div {:class "flex items-center justify-center h-screen text-muted-foreground"}
+   "Loading…"])
+
 (defn app []
-  (let [active @(rf/subscribe [::subs/active-page])
-        view (get-in pages [active :view])]
-    [:div {:class "container mx-auto max-w-2xl py-10"}
-     [navbar]
-     [:main {:class "py-8"}
-      [view]]]))
+  (let [active  @(rf/subscribe [::subs/active-page])
+        ready?  @(rf/subscribe [::subs/api-ready?])
+        view    (get-in pages [active :view])]
+    (if-not ready?
+      [loading]
+      [:div {:class "container mx-auto max-w-2xl py-10"}
+       [navbar]
+       [:main {:class "py-8"}
+        [view]]])))

@@ -15,21 +15,32 @@
     (set! (.-pathname u) joined-path)
     (.toString u)))
 
-;; Call bootstrap! once at app startup. It fetches each service's OpenAPI spec
-;; and registers martian's re-frame handlers for that service.
+;; Initializes martian for each backend service via the BFF.
+;; The BFF fetches the real OpenAPI spec and rewrites its server URL to
+;; point back through itself, so auth tokens never touch the browser.
 ;;
-;; Dispatching a request (single/default service):
+;; Add one martian/init call per service defined in server/config.clj.
+;; The path matches /api/{service-id}/openapi.json on the BFF.
+;;
+;; Example (single service, default martian instance):
+;;   (martian/init "/api/payments/openapi.json")
+;;
+;; Example (multiple services, named instances):
+;;   (martian/init "/api/payments/openapi.json"  {::martian/instance-id :payments})
+;;   (martian/init "/api/inventory/openapi.json" {::martian/instance-id :inventory})
+;;
+;; Dispatching a request (single/default instance):
 ;;   (rf/dispatch [::martian/request
-;;                 :operation-id          ;; matches operationId in the OpenAPI spec
-;;                 {:param "value"}       ;; path/query/body params as a flat map
+;;                 :list-orders        ;; operationId from the spec
+;;                 {:status "pending"} ;; params — martian handles path/query/body
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 ;;
-;; Dispatching a request (named service instance):
+;; Dispatching with a named instance:
 ;;   (rf/dispatch [::martian/request
-;;                 :service-name          ;; instance-id used in bootstrap!
-;;                 :operation-id
-;;                 {:param "value"}
+;;                 :payments           ;; instance-id
+;;                 :create-payment
+;;                 {:amount 100}
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 
