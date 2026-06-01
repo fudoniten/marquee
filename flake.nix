@@ -126,6 +126,29 @@
             PORT="''${PORT:-8080}"
             echo "Starting shadow-cljs dev server on http://localhost:$PORT"
             echo "Press Ctrl+C to stop."
+
+            # Link Nix-managed node_modules so shadow-cljs can find react etc.
+            if [ ! -e node_modules ]; then
+              ln -s ${node-modules}/node_modules node_modules
+            fi
+
+            mkdir -p public/css
+
+            # Initial synchronous build so the file exists before the HTTP server
+            # starts serving requests (shadow-cljs opens its HTTP port immediately).
+            ./node_modules/.bin/tailwindcss \
+              -c tailwind.config.js \
+              -i src/css/main.css \
+              -o public/css/main.css
+
+            # Watch for subsequent changes in background; kill on exit.
+            trap 'kill $(jobs -p) 2>/dev/null' EXIT
+            ./node_modules/.bin/tailwindcss \
+              -c tailwind.config.js \
+              -i src/css/main.css \
+              -o public/css/main.css \
+              --watch &
+
             npx shadow-cljs watch app
           '';
         };

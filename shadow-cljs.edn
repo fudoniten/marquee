@@ -1,6 +1,8 @@
 ;; shadow-cljs reads dependencies from deps.edn (`:deps true`), so the Maven
 ;; coordinates live there and npm packages live in package.json.
 {:deps true
+ 
+ :nrepl {:port 7002}
 
  :dev-http {8080 {:root            "public"
                   ;; In dev, proxy /api/* requests to the BFF (port 3000).

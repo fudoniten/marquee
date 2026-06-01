@@ -1,5 +1,19 @@
 (ns marquee.api
-  (:require [martian.re-frame :as martian]))
+  (:require [clojure.string :as str]
+            [martian.re-frame :as martian])
+  (:import [java.net URI]))
+
+(defn append-url-path
+  [url path]
+  (let [u (js/URL. url)
+        base-path (.-pathname u)
+        extra-path (str path)
+        joined-path (str
+                     (str/replace base-path #"/+$" "")
+                     "/"
+                     (str/replace extra-path #"^/+" ""))]
+    (set! (.-pathname u) joined-path)
+    (.toString u)))
 
 ;; Initializes martian for each backend service via the BFF.
 ;; The BFF fetches the real OpenAPI spec and rewrites its server URL to
@@ -30,7 +44,13 @@
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 
-(defn bootstrap! []
-  ;; TODO: add one martian/init call per entry in server/config.clj
-  ;; (martian/init "/api/payments/openapi.json" {::martian/instance-id :payments})
-  )
+(defn bootstrap! [{:keys [::config/pseudovision ::config/tunarr-scheduler ::config/tunabrain]}]
+  (let [{url :url} pseudovision]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :pseudovision}))
+  (let [{url :url} tunarr-scheduler]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :tunarr-scheduler}))
+  (let [{url :url} tunabrain]
+    (martian/init (append-url-path url "/openapi.json")
+                  {::martian/instance-id :tunabrain})))

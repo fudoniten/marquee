@@ -1,5 +1,6 @@
 (ns marquee.subs
-  (:require [re-frame.core :as rf]))
+  (:require [re-frame.core :as rf]
+            [martian.re-frame :as martian]))
 
 (rf/reg-sub
  ::active-page
