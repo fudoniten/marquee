@@ -30,7 +30,7 @@
         nodejs = pkgs.nodejs_22;
 
         # JDK used to run shadow-cljs (the ClojureScript compiler) at build time.
-        jdk = pkgs.jdk17_headless;
+        jdk = pkgs.jdk21_headless;
         clojure = pkgs.clojure.override { jdk = jdk; };
 
         # Offline Maven/git cache built from deps-lock.json (Maven side: shadow-cljs,
