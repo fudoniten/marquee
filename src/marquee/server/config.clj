@@ -4,18 +4,13 @@
   ([k]         (System/getenv k))
   ([k default] (or (System/getenv k) default)))
 
-;; Add one entry per OpenAPI-enabled backend service.
-;;
-;; Keys:
-;;   :url       – base URL of the service (no trailing slash)
-;;   :token     – Bearer token for Authorization header (nil = no auth)
-;;   :spec-path – path to the OpenAPI spec (default "/openapi.json")
-;;
-;; Example:
-;;   {:payments {:url       (env "PAYMENTS_URL" "http://localhost:9001")
-;;               :token     (env "PAYMENTS_TOKEN")
-;;               :spec-path "/openapi.json"}
-;;    :inventory {:url      (env "INVENTORY_URL" "http://localhost:9002")
-;;                :token    (env "INVENTORY_TOKEN")}}
-
-(def services {})
+(def services
+  {:pseudovision {:url       (env "PSEUDOVISION_URL")
+                  :token     (env "PSEUDOVISION_TOKEN")
+                  :spec-path (env "PSEUDOVISION_SPEC_PATH" "/openapi.json")}
+   :tunarr-scheduler {:url       (env "TUNARR_SCHEDULER_URL")
+                      :token     (env "TUNARR_SCHEDULER_TOKEN")
+                      :spec-path (env "TUNARR_SCHEDULER_SPEC_PATH" "/openapi.json")}
+   :tunabrain {:url       (env "TUNABRAIN_URL")
+               :token     (env "TUNABRAIN_TOKEN")
+               :spec-path (env "TUNABRAIN_SPEC_PATH" "/openapi.json")}})
