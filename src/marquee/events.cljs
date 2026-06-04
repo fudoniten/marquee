@@ -11,7 +11,10 @@
     :library-items {}
     :media-items {}
     :scheduler-metadata {}
-    :current-media-id nil}))
+    :current-media-id nil
+    :selected-library-id nil
+    :media-current-page 1
+    :media-page-size 20}))
 
 (rf/reg-event-db
  ::navigate
@@ -19,7 +22,9 @@
    (let [db' (assoc db :active-page page)]
      ;; Load data when navigating to media page
      (when (= page :media)
-       (rf/dispatch [::load-media-libraries]))
+       (rf/dispatch [::load-media-libraries])
+       ;; Reset to first page when navigating to media
+       (rf/dispatch [::set-media-page 1]))
      db')))
 
 (rf/reg-event-db
@@ -54,10 +59,16 @@
 (rf/reg-event-fx
  ::load-media-libraries-success
  (fn [{:keys [db]} [_ response]]
-   (let [libraries (:body response)]
+   (let [body (:body response)
+         ;; Extract items from paginated response
+         libraries (if (map? body)
+                     (:items body)  ; New paginated format
+                     body)          ; Fallback for non-paginated (backward compat)
+         first-library (first libraries)]
      {:db (assoc db :media-libraries libraries)
-      :dispatch-n (for [lib libraries]
-                    [::load-library-items (:id lib)])})))
+      ;; Auto-select first library if none selected
+      :dispatch (when (and first-library (nil? (:selected-library-id db)))
+                  [::select-library (:id first-library)])})))
 
 (rf/reg-event-db
  ::load-media-libraries-failure
@@ -79,7 +90,11 @@
 (rf/reg-event-db
  ::load-library-items-success
  (fn [db [_ library-id response]]
-   (let [items (:body response)]
+   (let [body (:body response)
+         ;; Extract items from paginated response
+         items (if (map? body)
+                 (:items body)  ; New paginated format
+                 body)]         ; Fallback for non-paginated (backward compat)
      (assoc-in db [:library-items library-id] items))))
 
 (rf/reg-event-db
@@ -131,3 +146,27 @@
  (fn [db [_ media-id response]]
    (js/console.error "Failed to load scheduler metadata:" media-id response)
    (assoc-in db [:scheduler-metadata media-id] false)))
+
+;; Library selection and pagination events
+
+(rf/reg-event-fx
+ ::select-library
+ (fn [{:keys [db]} [_ library-id]]
+   (let [already-loaded? (get-in db [:library-items library-id])]
+     {:db (-> db
+              (assoc :selected-library-id library-id)
+              (assoc :media-current-page 1))
+      :dispatch (when-not already-loaded?
+                  [::load-library-items library-id])})))
+
+(rf/reg-event-db
+ ::set-media-page
+ (fn [db [_ page]]
+   (assoc db :media-current-page page)))
+
+(rf/reg-event-db
+ ::set-media-page-size
+ (fn [db [_ size]]
+   (-> db
+       (assoc :media-page-size size)
+       (assoc :media-current-page 1))))

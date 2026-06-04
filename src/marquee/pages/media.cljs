@@ -7,10 +7,10 @@
                                              card-description card-content
                                              card-footer]]))
 
-(defn media-item-card [{:keys [id title description kind duration]}]
+(defn media-item-card [{:keys [id name title description kind duration]}]
   [card {:class "mb-4"}
    [card-header {}
-    [card-title {} (or title (str "Item #" id))]
+    [card-title {} (or title name (str "Item #" id))]
     (when kind
       [card-description {} (str "Type: " kind)])]
    [card-content {}
@@ -25,35 +25,94 @@
              :on-click #(rf/dispatch [::events/navigate-to-media-detail id])}
      "View Details"]]])
 
-(defn library-section [{:keys [id name]}]
-  (let [items @(rf/subscribe [::subs/library-items id])]
-    [:div {:class "mb-8"}
-     [:h2 {:class "text-2xl font-semibold mb-4"} name]
-     (if (nil? items)
-       [:p {:class "text-muted-foreground"} "Loading..."]
-       (if (empty? items)
-         [:p {:class "text-muted-foreground"} "No items found."]
-         [:div {:class "grid gap-4"}
-          (for [item items]
-            ^{:key (:id item)}
-            [media-item-card item])]))]))
+(defn library-selector [libraries selected-id]
+  [:div {:class "flex items-center gap-4 mb-6"}
+   [:label {:class "font-medium text-sm"} "Library:"]
+   [:select {:class "flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+             :value (or selected-id "")
+             :on-change #(rf/dispatch [::events/select-library (js/parseInt (.. % -target -value))])}
+    [:option {:value "" :disabled true} "Select a library..."]
+    (for [lib libraries]
+      ^{:key (:id lib)}
+      [:option {:value (:id lib)} (:name lib)])]])
+
+(defn pagination-controls [current-page total-pages]
+  (let [has-prev (> current-page 1)
+        has-next (< current-page total-pages)]
+    [:div {:class "flex items-center justify-between border-t pt-4 mt-6"}
+     [:div {:class "flex items-center gap-2"}
+      [button {:size :sm
+               :variant :outline
+               :disabled (not has-prev)
+               :on-click #(rf/dispatch [::events/set-media-page (dec current-page)])}
+       "← Previous"]
+      [button {:size :sm
+               :variant :outline
+               :disabled (not has-next)
+               :on-click #(rf/dispatch [::events/set-media-page (inc current-page)])}
+       "Next →"]]
+     [:div {:class "text-sm text-muted-foreground"}
+      (str "Page " current-page " of " total-pages)]]))
+
+(defn media-grid [items]
+  (if (empty? items)
+    [:p {:class "text-muted-foreground"} "No items found."]
+    [:div {:class "grid gap-4"}
+     (for [item items]
+       ^{:key (:id item)}
+       [media-item-card item])]))
 
 (defn page []
-  (let [libraries @(rf/subscribe [::subs/media-libraries])]
+  (let [libraries @(rf/subscribe [::subs/media-libraries])
+        selected-library-id @(rf/subscribe [::subs/selected-library-id])
+        all-items @(rf/subscribe [::subs/library-items selected-library-id])
+        current-page @(rf/subscribe [::subs/media-current-page])
+        page-size @(rf/subscribe [::subs/media-page-size])
+        paginated-items @(rf/subscribe [::subs/paginated-media-items])
+        total-pages @(rf/subscribe [::subs/media-total-pages])
+        selected-library @(rf/subscribe [::subs/selected-library])]
     [:div {:class "space-y-6"}
      [:div
       [:h1 {:class "text-3xl font-bold tracking-tight"} "Media"]
       [:p {:class "text-muted-foreground"}
        "Browse media items from Pseudovision."]]
      
+     ;; Loading state
      (when (nil? libraries)
        [:p {:class "text-muted-foreground"} "Loading libraries..."])
      
+     ;; No libraries state
      (when (and (not (nil? libraries)) (empty? libraries))
        [:p {:class "text-muted-foreground"} "No libraries found."])
      
+     ;; Library selector
      (when (seq libraries)
+       [library-selector libraries selected-library-id])
+     
+     ;; Selected library content
+     (when selected-library-id
        [:div
-        (for [library libraries]
-          ^{:key (:id library)}
-          [library-section library])])]))
+        ;; Library info
+        (when selected-library
+          [:div {:class "mb-4"}
+           [:h2 {:class "text-2xl font-semibold"} (:name selected-library)]
+           (when all-items
+             [:p {:class "text-sm text-muted-foreground"}
+              (str (count all-items) " items total")])])
+        
+        ;; Loading items
+        (cond
+          (nil? all-items)
+          [:p {:class "text-muted-foreground"} "Loading items..."]
+          
+          ;; Display items
+          (seq all-items)
+          [:div
+           [media-grid paginated-items]
+           (when (> total-pages 1)
+             [pagination-controls current-page total-pages])]
+          
+          ;; No items
+          :else
+          [:p {:class "text-muted-foreground"} "No items in this library."])])]))
+
