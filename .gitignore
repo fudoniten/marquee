@@ -16,3 +16,7 @@ target/
 .clj-kondo/
 .lsp/
 node_modules
+
+# Environment variables (do not commit secrets!)
+.envrc
+.env

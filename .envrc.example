@@ -1,0 +1,15 @@
+# Service URLs and tokens for the BFF (Backend For Frontend)
+# Copy this file to .envrc and fill in your tokens
+# If using direnv, run: direnv allow
+
+# Pseudovision service
+export PSEUDOVISION_URL=https://pseudovision.kube.sea.fudo.link
+export PSEUDOVISION_TOKEN=  # optional, leave empty if no auth required
+
+# Tunarr Scheduler service
+export TUNARR_SCHEDULER_URL=https://tunarr-scheduler.kube.sea.fudo.link
+export TUNARR_SCHEDULER_TOKEN=  # optional, leave empty if no auth required
+
+# Tunabrain service (future integration)
+export TUNABRAIN_URL=https://tunabrain.kube.sea.fudo.link
+export TUNABRAIN_TOKEN=  # optional, leave empty if no auth required

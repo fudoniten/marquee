@@ -21,3 +21,30 @@
    (let [instances (vals (get db :martian.re-frame/martian {}))]
      (or (empty? instances)
          (every? (comp boolean :m) instances)))))
+
+;; Media subscriptions
+
+(rf/reg-sub
+ ::media-libraries
+ (fn [db _]
+   (:media-libraries db)))
+
+(rf/reg-sub
+ ::library-items
+ (fn [db [_ library-id]]
+   (get-in db [:library-items library-id])))
+
+(rf/reg-sub
+ ::current-media-id
+ (fn [db _]
+   (:current-media-id db)))
+
+(rf/reg-sub
+ ::media-item
+ (fn [db [_ media-id]]
+   (get-in db [:media-items media-id])))
+
+(rf/reg-sub
+ ::scheduler-metadata
+ (fn [db [_ media-id]]
+   (get-in db [:scheduler-metadata media-id])))

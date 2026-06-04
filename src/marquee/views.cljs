@@ -4,17 +4,22 @@
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
             [marquee.pages.home :as home]
-            [marquee.pages.about :as about]))
+            [marquee.pages.about :as about]
+            [marquee.pages.media :as media]
+            [marquee.pages.media-detail :as media-detail]))
 
 (def pages
-  {:home  {:label "Home"  :view home/page}
-   :about {:label "About" :view about/page}})
+  {:home         {:label "Home"  :view home/page :show-in-nav true}
+   :about        {:label "About" :view about/page :show-in-nav true}
+   :media        {:label "Media" :view media/page :show-in-nav true}
+   :media-detail {:label "Media Detail" :view media-detail/page :show-in-nav false}})
 
 (defn navbar []
   (let [active @(rf/subscribe [::subs/active-page])]
     [:nav {:class "flex items-center gap-1 border-b pb-4"}
      [:span {:class "mr-4 font-semibold"} "Marquee"]
-     (for [[page {:keys [label]}] pages]
+     (for [[page {:keys [label show-in-nav]}] pages
+           :when show-in-nav]
        ^{:key page}
        [button {:variant (if (= page active) :secondary :ghost)
                 :size :sm
