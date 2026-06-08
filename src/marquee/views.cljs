@@ -6,12 +6,14 @@
             [marquee.pages.home :as home]
             [marquee.pages.about :as about]
             [marquee.pages.media :as media]
-            [marquee.pages.media-detail :as media-detail]))
+            [marquee.pages.media-detail :as media-detail]
+            [marquee.pages.api-docs :as api-docs]))
 
 (def pages
   {:home         {:label "Home"  :view home/page :show-in-nav true}
    :about        {:label "About" :view about/page :show-in-nav true}
    :media        {:label "Media" :view media/page :show-in-nav true}
+   :api-docs     {:label "API Docs" :view api-docs/page :show-in-nav true}
    :media-detail {:label "Media Detail" :view media-detail/page :show-in-nav false}})
 
 (defn navbar []
@@ -33,10 +35,12 @@
 (defn app []
   (let [active  @(rf/subscribe [::subs/active-page])
         ready?  @(rf/subscribe [::subs/api-ready?])
-        view    (get-in pages [active :view])]
+        view    (get-in pages [active :view])
+        ;; The API docs benefit from more horizontal room than other pages.
+        width   (if (= active :api-docs) "max-w-5xl" "max-w-2xl")]
     (if-not ready?
       [loading]
-      [:div {:class "container mx-auto max-w-2xl py-10"}
+      [:div {:class (str "container mx-auto py-10 " width)}
        [navbar]
        [:main {:class "py-8"}
         [view]]])))
