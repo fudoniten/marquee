@@ -95,3 +95,25 @@
      (if items
        (js/Math.ceil (/ (count items) page-size))
        0))))
+
+;; API documentation browser subscriptions
+
+(rf/reg-sub
+ ::api-selected-service
+ (fn [db _]
+   (:api-selected-service db)))
+
+(rf/reg-sub
+ ::api-spec
+ (fn [db [_ service-id]]
+   (get-in db [:api-specs service-id])))
+
+(rf/reg-sub
+ ::api-expanded-ops
+ (fn [db _]
+   (:api-expanded-ops db #{})))
+
+(rf/reg-sub
+ ::api-filter
+ (fn [db _]
+   (:api-filter db "")))

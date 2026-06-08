@@ -14,7 +14,11 @@
     :current-media-id nil
     :selected-library-id nil
     :media-current-page 1
-    :media-page-size 20}))
+    :media-page-size 20
+    :api-specs {}
+    :api-selected-service nil
+    :api-expanded-ops #{}
+    :api-filter ""}))
 
 (rf/reg-event-db
  ::navigate
@@ -25,6 +29,9 @@
        (rf/dispatch [::load-media-libraries])
        ;; Reset to first page when navigating to media
        (rf/dispatch [::set-media-page 1]))
+     ;; Default to the first service when first visiting the API docs.
+     (when (and (= page :api-docs) (nil? (:api-selected-service db)))
+       (rf/dispatch [::select-api-service :pseudovision]))
      db')))
 
 (rf/reg-event-db
@@ -169,3 +176,60 @@
    (-> db
        (assoc :media-page-size size)
        (assoc :media-current-page 1))))
+
+;; API documentation browser events
+
+;; Plain fetch of an OpenAPI spec from the BFF as a JSON map (string keys).
+(rf/reg-fx
+ ::fetch-json
+ (fn [{:keys [url on-success on-failure]}]
+   (-> (js/fetch url)
+       (.then (fn [resp]
+                (if (.-ok resp)
+                  (.json resp)
+                  (throw (js/Error. (str "HTTP " (.-status resp) " " (.-statusText resp)))))))
+       (.then (fn [data] (rf/dispatch (conj on-success (js->clj data)))))
+       (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
+
+(rf/reg-event-fx
+ ::load-api-spec
+ (fn [{:keys [db]} [_ service-id]]
+   ;; Only fetch once per service.
+   (if (get-in db [:api-specs service-id])
+     {:db db}
+     {:db (assoc-in db [:api-specs service-id] {:status :loading})
+      ::fetch-json {:url        (str "/api/" (name service-id) "/openapi.json")
+                    :on-success [::load-api-spec-success service-id]
+                    :on-failure [::load-api-spec-failure service-id]}})))
+
+(rf/reg-event-db
+ ::load-api-spec-success
+ (fn [db [_ service-id spec]]
+   (assoc-in db [:api-specs service-id] {:status :loaded :spec spec})))
+
+(rf/reg-event-db
+ ::load-api-spec-failure
+ (fn [db [_ service-id error]]
+   (js/console.error "Failed to load API spec:" (name service-id) error)
+   (assoc-in db [:api-specs service-id] {:status :error :error error})))
+
+(rf/reg-event-fx
+ ::select-api-service
+ (fn [{:keys [db]} [_ service-id]]
+   {:db       (assoc db :api-selected-service service-id :api-filter "")
+    :dispatch [::load-api-spec service-id]}))
+
+(rf/reg-event-db
+ ::toggle-api-operation
+ (fn [db [_ op-key]]
+   (update db :api-expanded-ops
+           (fn [expanded]
+             (let [expanded (or expanded #{})]
+               (if (contains? expanded op-key)
+                 (disj expanded op-key)
+                 (conj expanded op-key)))))))
+
+(rf/reg-event-db
+ ::set-api-filter
+ (fn [db [_ text]]
+   (assoc db :api-filter text)))

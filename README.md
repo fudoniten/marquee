@@ -81,6 +81,10 @@ or a shell script to set these variables.
   - `home.cljs`, `about.cljs` — example pages.
   - `media.cljs` — displays media from Pseudovision libraries.
   - `media_detail.cljs` — shows metadata from both Pseudovision and Tunarr Scheduler.
+  - `api_docs.cljs` — browsable OpenAPI documentation for every configured
+    service (Pseudovision, Tunarr Scheduler, Tunabrain). Fetches the specs the
+    BFF already serves at `/api/<service>/openapi.json` and renders a
+    filterable list of operations grouped by tag, plus component schemas.
 - `src/marquee/components/{button,card}.cljs` — shadcn/ui as Reagent components.
 - `src/marquee/lib/utils.cljs` — the shadcn `cn` helper.
 - `src/css/main.css` — Tailwind entry + shadcn design tokens.
