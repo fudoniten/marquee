@@ -149,11 +149,10 @@ API calls are made using martian-re-frame. The operation IDs are auto-generated 
 
 ```clojure
 (rf/dispatch [::martian/request
-              :pseudovision                  ;; service ID
-              :get-api-media-libraries       ;; operation ID
-              {}                             ;; params
-              [::on-success]                 ;; success event
-              [::on-failure]])               ;; failure event
+              :get-api-media-libraries                  ;; operation ID
+              {::martian/instance-id :pseudovision}     ;; params (instance-id + path/query/body)
+              [::on-success]                            ;; success event
+              [::on-failure]])                          ;; failure event
 ```
 
 ### Operation ID Format
@@ -171,9 +170,9 @@ Path parameters are passed in the params map:
 
 ```clojure
 (rf/dispatch [::martian/request
-              :pseudovision
               :get-api-media-items-id
-              {:id 123}                      ;; path param
+              {::martian/instance-id :pseudovision
+               :id 123}                      ;; path param
               [::on-success]
               [::on-failure]])
 ```
@@ -233,10 +232,10 @@ The architecture is ready for Tunabrain integration. To add it:
 User clicks Media tab
   → [::events/navigate :media]
   → [::events/load-media-libraries]
-  → [::martian/request :pseudovision :get-api-media-libraries ...]
+  → [::martian/request :get-api-media-libraries {::martian/instance-id :pseudovision} ...]
   → [::events/load-media-libraries-success]
   → For each library: [::events/load-library-items]
-  → [::martian/request :pseudovision :get-api-media-libraries-id-items ...]
+  → [::martian/request :get-api-media-libraries-id-items {::martian/instance-id :pseudovision :id ...} ...]
   → [::events/load-library-items-success]
   → UI updates with @(rf/subscribe [::subs/library-items])
 ```

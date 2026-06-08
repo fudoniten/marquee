@@ -8,9 +8,9 @@
 ;;
 ;; Dispatching a request:
 ;;   (rf/dispatch [::martian/request
-;;                 :pseudovision       ;; instance-id (service key)
-;;                 :some-operation     ;; operationId from the OpenAPI spec
-;;                 {:param "value"}    ;; params — martian handles path/query/body
+;;                 :some-operation                            ;; operationId from the OpenAPI spec
+;;                 {::martian/instance-id :pseudovision       ;; service key
+;;                  :param "value"}                           ;; martian handles path/query/body
 ;;                 [::on-success]
 ;;                 [::on-failure]])
 
