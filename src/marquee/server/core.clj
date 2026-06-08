@@ -113,7 +113,10 @@
         svc  (and sid (get config/services sid))]
     (cond
       (nil? sid)
-      {:status 404 :body {:error "Not found"}}
+      ;; SPA catch-all: serve index.html for any non-API path so that
+      ;; deep links and browser back/forward work with pushState routing.
+      (-> (resp/response (slurp "public/index.html"))
+          (resp/content-type "text/html"))
 
       (nil? svc)
       {:status 404 :body {:error (str "Unknown service: " (name sid))}}

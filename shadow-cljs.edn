@@ -5,10 +5,10 @@
  :nrepl {:port 7002}
 
  :dev-http {8080 {:root            "public"
-                  ;; In dev, proxy /api/* requests to the BFF (port 3000).
-                  ;; Other requests (static files) are served from :root.
+                  ;; In dev, proxy /api/* and SPA routes to the BFF (port 3000).
+                  ;; Static assets (files with extensions) are served from :root.
                   :proxy-url       "http://localhost:3000"
-                  :proxy-predicate marquee.server.dev/api-request?}}
+                  :proxy-predicate marquee.server.dev/api-or-spa-request?}}
 
  :builds
  {:app {:target     :browser
