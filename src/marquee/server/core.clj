@@ -54,7 +54,7 @@
   [service-id {:keys [url spec-path] :or {spec-path "/openapi.json"}}]
   (let [target (str url spec-path)
         response (try
-                   (client/get target {:as :json :throw-exceptions false})
+                   (client/get target {:as :json-string-keys :throw-exceptions false})
                    (catch Exception e
                      (throw (ex-info (str "Could not reach " target ": " (.getMessage e))
                                      {:service service-id :url target}
