@@ -9,12 +9,44 @@
 ;; Holds fetched+rewritten specs keyed by service-id, populated at startup.
 (defonce spec-cache (atom {}))
 
+(defn- add-operation-ids
+  "Add operationId to endpoints that are missing it, using the pattern:
+   {method}-{path-with-dashes}, e.g. 'get-api-media-items-id'"
+  [paths]
+  (reduce-kv
+   (fn [acc path methods]
+     (let [;; Convert path to a safe operation name part (remove leading slash, replace special chars)
+           path-part (-> path
+                        (str/replace #"^/" "")
+                        (str/replace #"[{}/_]" "-")
+                        (str/replace #"-+$" ""))
+           ;; Add operationId to each method if missing
+           updated-methods (reduce-kv
+                           (fn [m-acc method details]
+                             (assoc m-acc method
+                                    (if (get details "operationId")
+                                      details
+                                      (assoc details "operationId"
+                                             (str (name method) "-" path-part)))))
+                           {}
+                           methods)]
+       (assoc acc path updated-methods)))
+   {}
+   paths))
+
 (defn- rewrite-spec [service-id spec]
   (let [base-path (str "/api/" (name service-id))]
     ;; Rewrite the server URL so the frontend's martian routes through the BFF.
-    (if (get spec "openapi")
-      (assoc spec "servers" [{"url" base-path}])                       ; OpenAPI 3.x
-      (assoc spec "basePath" base-path "host" "" "schemes" []))))      ; Swagger 2.0
+    ;; Also ensure all endpoints have operationId for martian route generation.
+    (cond-> spec
+      (get spec "openapi")
+      (assoc "servers" [{"url" base-path}])                           ; OpenAPI 3.x
+      
+      (not (get spec "openapi"))
+      (assoc "basePath" base-path "host" "" "schemes" [])             ; Swagger 2.0
+      
+      (get spec "paths")
+      (update "paths" add-operation-ids))))
 
 (defn fetch-spec!
   "Fetches the upstream OpenAPI spec. Throws ex-info with a clear message on
