@@ -74,6 +74,7 @@
 (def app (wrap-json-response handler))
 
 (defn -main [& _]
+  (config/validate!)
   (let [port (Integer/parseInt (or (System/getenv "PORT") "3000"))]
     (http/run-server app {:port port})
     (println (str "BFF listening on port " port))))
