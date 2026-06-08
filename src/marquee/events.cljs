@@ -50,9 +50,8 @@
  (fn [{:keys [db]} _]
    {:db db
     :dispatch [::martian/request
-               :pseudovision
                :get-api-media-libraries
-               {}
+               {::martian/instance-id :pseudovision}
                [::load-media-libraries-success]
                [::load-media-libraries-failure]]}))
 
@@ -81,9 +80,9 @@
  (fn [{:keys [db]} [_ library-id]]
    {:db db
     :dispatch [::martian/request
-               :pseudovision
                :get-api-media-libraries-id-items
-               {:id library-id}
+               {::martian/instance-id :pseudovision
+                :id library-id}
                [::load-library-items-success library-id]
                [::load-library-items-failure library-id]]}))
 
@@ -108,9 +107,9 @@
  (fn [{:keys [db]} [_ media-id]]
    {:db db
     :dispatch [::martian/request
-               :pseudovision
                :get-api-media-items-id
-               {:id media-id}
+               {::martian/instance-id :pseudovision
+                :id media-id}
                [::load-media-item-success media-id]
                [::load-media-item-failure media-id]]}))
 
@@ -130,9 +129,9 @@
  (fn [{:keys [db]} [_ media-id]]
    {:db db
     :dispatch [::martian/request
-               :tunarr-scheduler
                :get-api-media-item-media-id
-               {:media-id media-id}
+               {::martian/instance-id :tunarr-scheduler
+                :media-id media-id}
                [::load-scheduler-metadata-success media-id]
                [::load-scheduler-metadata-failure media-id]]}))
 

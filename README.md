@@ -112,11 +112,10 @@ From the frontend, dispatch martian requests:
 
 ```clojure
 (rf/dispatch [::martian/request
-              :pseudovision              ;; service ID
-              :get-api-media-libraries   ;; operation ID from OpenAPI
-              {}                         ;; params (path/query/body)
-              [::on-success]             ;; success event
-              [::on-failure]])           ;; failure event
+              :get-api-media-libraries                  ;; operation ID from OpenAPI
+              {::martian/instance-id :pseudovision}     ;; service ID + path/query/body params
+              [::on-success]                            ;; success event
+              [::on-failure]])                          ;; failure event
 ```
 
 The operation IDs are derived from the OpenAPI spec and follow the pattern
