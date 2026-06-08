@@ -1,4 +1,5 @@
-(ns marquee.server.config)
+(ns marquee.server.config
+  (:require [clojure.string]))
 
 (defn- env
   ([k]         (System/getenv k))
@@ -14,3 +15,17 @@
    :tunabrain {:url       (env "TUNABRAIN_URL")
                :token     (env "TUNABRAIN_TOKEN")
                :spec-path (env "TUNABRAIN_SPEC_PATH" "/openapi.json")}})
+
+(defn- url-env-var [service-id]
+  (str (-> service-id name (.replace "-" "_") .toUpperCase) "_URL"))
+
+(defn validate!
+  "Throws if any service is missing its required *_URL env var."
+  []
+  (let [missing (for [[id {:keys [url]}] services
+                      :when (clojure.string/blank? url)]
+                  (url-env-var id))]
+    (when (seq missing)
+      (throw (ex-info (str "Missing required environment variables: "
+                           (clojure.string/join ", " missing))
+                      {:missing (vec missing)})))))
