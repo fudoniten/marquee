@@ -157,7 +157,7 @@
     :dispatch [::martian/request
                :get-api-media-item-media-id
                {::martian/instance-id :tunarr-scheduler
-                :media-id media-id}
+                :media-id (str media-id)}
                [::load-scheduler-metadata-success media-id]
                [::load-scheduler-metadata-failure media-id]]}))
 
