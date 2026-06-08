@@ -1,6 +1,12 @@
 (ns marquee.events
   (:require [re-frame.core :as rf]
-            [martian.re-frame :as martian]))
+            [martian.re-frame :as martian]
+            [marquee.routes :as routes]))
+
+(rf/reg-fx
+ :push-history
+ (fn [path]
+   (.pushState js/history nil "" path)))
 
 (rf/reg-event-db
  ::initialize-db
@@ -20,30 +26,43 @@
     :api-expanded-ops #{}
     :api-filter ""}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::navigate
- (fn [db [_ page]]
-   (let [db' (assoc db :active-page page)]
-     ;; Load data when navigating to media page
-     (when (= page :media)
-       (rf/dispatch [::load-media-libraries])
-       ;; Reset to first page when navigating to media
-       (rf/dispatch [::set-media-page 1]))
-     ;; Default to the first service when first visiting the API docs.
-     (when (and (= page :api-docs) (nil? (:api-selected-service db)))
-       (rf/dispatch [::select-api-service :pseudovision]))
-     db')))
+ (fn [{:keys [db]} [_ page]]
+   (let [dispatches (concat
+                      (when (= page :media)
+                        [[::load-media-libraries] [::set-media-page 1]])
+                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
+                        [[::select-api-service :pseudovision]]))]
+     (cond-> {:db           (assoc db :active-page page)
+              :push-history (routes/page->path page)}
+       (seq dispatches) (assoc :dispatch-n dispatches)))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::navigate-to-media-detail
- (fn [db [_ media-id]]
-   (let [db' (-> db
-                 (assoc :active-page :media-detail)
-                 (assoc :current-media-id media-id))]
-     ;; Load media item and metadata
-     (rf/dispatch [::load-media-item media-id])
-     (rf/dispatch [::load-scheduler-metadata media-id])
-     db')))
+ (fn [{:keys [db]} [_ media-id]]
+   {:db           (-> db
+                      (assoc :active-page :media-detail)
+                      (assoc :current-media-id media-id))
+    :push-history (routes/media-detail-path media-id)
+    :dispatch-n   [[::load-media-item media-id]
+                   [::load-scheduler-metadata media-id]]}))
+
+(rf/reg-event-fx
+ ::restore-from-url
+ (fn [{:keys [db]} [_ path]]
+   (let [{:keys [page media-id]} (or (routes/parse-path path) {:page :home})
+         dispatches (concat
+                      (when (= page :media)
+                        [[::load-media-libraries] [::set-media-page 1]])
+                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
+                        [[::select-api-service :pseudovision]])
+                      (when (= page :media-detail)
+                        [[::load-media-item media-id]
+                         [::load-scheduler-metadata media-id]]))]
+     (cond-> {:db (cond-> (assoc db :active-page page)
+                    (= page :media-detail) (assoc :current-media-id media-id))}
+       (seq dispatches) (assoc :dispatch-n dispatches)))))
 
 (rf/reg-event-db
  ::inc-counter
