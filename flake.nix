@@ -117,15 +117,20 @@
           '';
         };
 
-        # `nix run .#dev-server` -> run shadow-cljs watch for development.
+        # `nix run .#dev-server` -> run shadow-cljs watch + BFF server for development.
         dev-server = pkgs.writeShellApplication {
           name = "dev-server";
           runtimeInputs = [ clojure jdk nodejs ];
           text = ''
             cd "''${1:-$PWD}"
             PORT="''${PORT:-8080}"
-            echo "Starting shadow-cljs dev server on http://localhost:$PORT"
-            echo "Press Ctrl+C to stop."
+            BFF_PORT="''${BFF_PORT:-3000}"
+            
+            echo "Starting Marquee development environment..."
+            echo "  Frontend (shadow-cljs): http://localhost:$PORT"
+            echo "  BFF server:             http://localhost:$BFF_PORT"
+            echo "Press Ctrl+C to stop all services."
+            echo ""
 
             # Link Nix-managed node_modules so shadow-cljs can find react etc.
             if [ ! -e node_modules ]; then
@@ -141,14 +146,25 @@
               -i src/css/main.css \
               -o public/css/main.css
 
-            # Watch for subsequent changes in background; kill on exit.
+            # Kill all background jobs on exit
             trap 'kill $(jobs -p) 2>/dev/null' EXIT
+
+            # Start Tailwind CSS watcher in background
             ./node_modules/.bin/tailwindcss \
               -c tailwind.config.js \
               -i src/css/main.css \
               -o public/css/main.css \
               --watch &
 
+            # Start BFF server in background
+            echo "Starting BFF server on port $BFF_PORT..."
+            clojure -M:server &
+            
+            # Wait a moment for BFF to start
+            sleep 2
+
+            # Start shadow-cljs in foreground (this will block until Ctrl+C)
+            echo "Starting shadow-cljs on port $PORT..."
             npx shadow-cljs watch app
           '';
         };
