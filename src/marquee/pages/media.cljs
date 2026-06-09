@@ -67,7 +67,6 @@
         selected-library-id @(rf/subscribe [::subs/selected-library-id])
         all-items @(rf/subscribe [::subs/library-items selected-library-id])
         current-page @(rf/subscribe [::subs/media-current-page])
-        page-size @(rf/subscribe [::subs/media-page-size])
         paginated-items @(rf/subscribe [::subs/paginated-media-items])
         total-pages @(rf/subscribe [::subs/media-total-pages])
         selected-library @(rf/subscribe [::subs/selected-library])]
@@ -76,19 +75,19 @@
       [:h1 {:class "text-3xl font-bold tracking-tight"} "Media"]
       [:p {:class "text-muted-foreground"}
        "Browse media items from Pseudovision."]]
-     
+
      ;; Loading state
      (when (nil? libraries)
        [:p {:class "text-muted-foreground"} "Loading libraries..."])
-     
+
      ;; No libraries state
      (when (and (not (nil? libraries)) (empty? libraries))
        [:p {:class "text-muted-foreground"} "No libraries found."])
-     
+
      ;; Library selector
      (when (seq libraries)
        [library-selector libraries selected-library-id])
-     
+
      ;; Selected library content
      (when selected-library-id
        [:div
@@ -99,19 +98,19 @@
            (when all-items
              [:p {:class "text-sm text-muted-foreground"}
               (str (count all-items) " items total")])])
-        
+
         ;; Loading items
         (cond
           (nil? all-items)
           [:p {:class "text-muted-foreground"} "Loading items..."]
-          
+
           ;; Display items
           (seq all-items)
           [:div
            [media-grid paginated-items]
            (when (> total-pages 1)
              [pagination-controls current-page total-pages])]
-          
+
           ;; No items
           :else
           [:p {:class "text-muted-foreground"} "No items in this library."])])]))
