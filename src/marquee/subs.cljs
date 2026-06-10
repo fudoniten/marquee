@@ -132,16 +132,20 @@
  (fn [db _] (:channels db)))
 
 (rf/reg-sub
- ::schedule-grid
- (fn [db _] (:schedule-grid db {})))
-
-(rf/reg-sub
- ::schedule-loading?
- (fn [db _] (:schedule-loading? db false)))
+ ::channels-loading?
+ (fn [db _] (:channels-loading? db false)))
 
 (rf/reg-sub
  ::schedule-window-start
  (fn [db _] (:schedule-window-start db (.getTime (js/Date.)))))
+
+(rf/reg-sub
+ ::all-channel-events
+ (fn [db _] (:channel-events db {})))
+
+(rf/reg-sub
+ ::channel-events-loading?
+ (fn [db _] (boolean (seq (:channel-events-loading db)))))
 
 (rf/reg-sub
  ::current-channel-id
@@ -156,11 +160,12 @@
      (first (filter #(= (:id %) id) channels)))))
 
 (rf/reg-sub
- ::current-channel-schedule
+ ::current-channel-events
  (fn [db _]
    (let [id (:current-channel-id db)]
-     (get-in db [:channel-schedules id]))))
+     (get-in db [:channel-events id]))))
 
 (rf/reg-sub
- ::channel-schedule-loading?
- (fn [db _] (:channel-schedule-loading? db false)))
+ ::channel-events-loading-for?
+ (fn [db [_ channel-id]]
+   (contains? (:channel-events-loading db #{}) channel-id)))

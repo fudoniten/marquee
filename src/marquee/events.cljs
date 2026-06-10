@@ -30,12 +30,11 @@
     :api-filter ""
     ;; Schedule / guide state
     :channels nil
-    :schedule-grid {}
-    :schedule-loading? false
+    :channels-loading? false
+    :channel-events {}           ; channel-id → [PlayoutEvent ...]
+    :channel-events-loading #{}  ; set of channel-ids currently loading
     :schedule-window-start (.getTime (js/Date.))
-    :current-channel-id nil
-    :channel-schedules {}
-    :channel-schedule-loading? false}))
+    :current-channel-id nil}))
 
 (rf/reg-event-fx
  ::load-app-config
@@ -65,9 +64,7 @@
                       (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                         [[::select-api-service :pseudovision]])
                       (when (= page :schedule-grid)
-                        (if (nil? (:channels db))
-                          [[::load-channels]]
-                          [[::load-schedule-grid]])))]
+                        [[::load-channels]])]
      (cond-> {:db           (assoc db :active-page page)
               :push-history (routes/page->path page)}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
@@ -96,12 +93,10 @@
                       (when (= page :media-detail)
                         [[::load-media-item media-id]])
                       (when (= page :schedule-grid)
-                        (if (nil? (:channels db))
-                          [[::load-channels]]
-                          [[::load-schedule-grid]]))
+                        [[::load-channels]])
                       (when (= page :channel-schedule)
                         (cond-> (when (nil? (:channels db)) [[::load-channels]])
-                          channel-id (conj [::load-channel-schedule channel-id]))))]
+                          channel-id (conj [::load-channel-events channel-id]))))]
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media-detail)     (assoc :current-media-id media-id)
                     (= page :channel-schedule) (assoc :current-channel-id channel-id))}
@@ -307,17 +302,25 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Schedule / guide events
-;; NOTE: These assume the pseudovision API exposes:
-;;   GET /channels                   → [{:id, :name, :description, ...}]
-;;   GET /channels/{id}/schedule     → [{:title, :description, :start-ms, :end-ms, :thumbnail-url}, ...]
-;;   GET /schedule/grid?from=&to=    → {:channel-id [{:title, :start-ms, :end-ms}, ...]}
-;; Adjust the martian operation IDs below to match the actual spec operationIds.
+;;
+;; Data model:
+;;   Channels:  GET /api/channels        → PaginatedChannels {:items [...]}
+;;   Events:    GET /api/channels/:channel-id/playout/events
+;;              → PaginatedPlayoutEvents {:items [{:start-at, :finish-at,
+;;                :guide-start-at, :guide-finish-at, :custom-title,
+;;                :media-item-id, :kind, ...}]}
+;;              Cursor = ISO-8601 timestamp of the last event's :start-at.
+;;              Passing no cursor returns events from now onwards.
+;;
+;; Martian operationIds (BFF-generated from reitit paths):
+;;   get-api-channels
+;;   get-api-channels-channel-id-playout-events
 ;; ---------------------------------------------------------------------------
 
 (rf/reg-event-fx
  ::load-channels
  (fn [{:keys [db]} _]
-   {:db       (assoc db :schedule-loading? true)
+   {:db       (assoc db :channels-loading? true)
     :dispatch [::martian/request
                :get-api-channels
                {::martian/instance-id :pseudovision}
@@ -329,99 +332,80 @@
  (fn [{:keys [db]} [_ response]]
    (let [body     (:body response)
          channels (if (map? body) (:items body) body)]
-     {:db       (-> db
-                    (assoc :channels channels)
-                    (assoc :schedule-loading? false))
-      :dispatch [::load-schedule-grid]})))
+     {:db         (-> db
+                      (assoc :channels channels)
+                      (assoc :channels-loading? false))
+      ;; Kick off event loading for each channel so the guide has data.
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
 
 (rf/reg-event-db
  ::load-channels-failure
  (fn [db [_ response]]
    (js/console.error "Failed to load channels:" response)
-   (-> db (assoc :channels []) (assoc :schedule-loading? false))))
+   (-> db (assoc :channels []) (assoc :channels-loading? false))))
 
+;; Load playout events for a single channel (for guide grid or channel page).
+;; cursor is an optional ISO-8601 string; omitting it returns events from now.
 (rf/reg-event-fx
- ::load-schedule-grid
- (fn [{:keys [db]} _]
-   (let [from (:schedule-window-start db)
-         to   (+ from grid-window-ms)]
-     {:db       (assoc db :schedule-loading? true)
-      :dispatch [::martian/request
-                 :get-api-schedule-grid
-                 {::martian/instance-id :pseudovision
-                  :from from
-                  :to   to}
-                 [::load-schedule-grid-success]
-                 [::load-schedule-grid-failure]]})))
+ ::load-channel-events
+ (fn [{:keys [db]} [_ channel-id]]
+   {:db       (update db :channel-events-loading (fnil conj #{}) channel-id)
+    :dispatch [::martian/request
+               :get-api-channels-channel-id-playout-events
+               {::martian/instance-id :pseudovision
+                :channel-id           channel-id
+                :limit                50}
+               [::load-channel-events-success channel-id]
+               [::load-channel-events-failure channel-id]]}))
 
 (rf/reg-event-db
- ::load-schedule-grid-success
- (fn [db [_ response]]
+ ::load-channel-events-success
+ (fn [db [_ channel-id response]]
+   (let [body  (:body response)
+         items (if (map? body) (:items body) body)]
+     (-> db
+         (assoc-in [:channel-events channel-id] items)
+         (update :channel-events-loading disj channel-id)))))
+
+(rf/reg-event-db
+ ::load-channel-events-failure
+ (fn [db [_ channel-id response]]
+   (js/console.error "Failed to load channel events:" channel-id response)
    (-> db
-       (assoc :schedule-grid (:body response))
-       (assoc :schedule-loading? false))))
-
-(rf/reg-event-db
- ::load-schedule-grid-failure
- (fn [db [_ response]]
-   (js/console.error "Failed to load schedule grid:" response)
-   (-> db (assoc :schedule-loading? false))))
+       (assoc-in [:channel-events channel-id] [])
+       (update :channel-events-loading disj channel-id))))
 
 (rf/reg-event-fx
  ::schedule-window-forward
  (fn [{:keys [db]} _]
-   {:db       (update db :schedule-window-start + grid-window-ms)
-    :dispatch [::load-schedule-grid]}))
+   (let [channels (or (:channels db) [])]
+     {:db         (update db :schedule-window-start + grid-window-ms)
+      ;; Reload events so we have data for the new window.
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
 
 (rf/reg-event-fx
  ::schedule-window-back
  (fn [{:keys [db]} _]
-   {:db       (update db :schedule-window-start - grid-window-ms)
-    :dispatch [::load-schedule-grid]}))
+   (let [channels (or (:channels db) [])]
+     {:db         (update db :schedule-window-start - grid-window-ms)
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
 
 (rf/reg-event-fx
  ::schedule-window-reset
  (fn [{:keys [db]} _]
-   {:db       (assoc db :schedule-window-start (.getTime (js/Date.)))
-    :dispatch [::load-schedule-grid]}))
+   (let [channels (or (:channels db) [])]
+     {:db         (assoc db :schedule-window-start (.getTime (js/Date.)))
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
 
 (rf/reg-event-fx
  ::navigate-to-channel
  (fn [{:keys [db]} [_ channel-id]]
-   (let [already-loaded? (get-in db [:channel-schedules channel-id])
-         need-channels?  (nil? (:channels db))]
+   (let [need-channels? (nil? (:channels db))
+         need-events?   (nil? (get-in db [:channel-events channel-id]))]
      {:db           (-> db
                         (assoc :active-page :channel-schedule)
                         (assoc :current-channel-id channel-id))
       :push-history (routes/channel-path channel-id)
       :dispatch-n   (cond-> []
-                      need-channels?      (conj [::load-channels])
-                      (not already-loaded?) (conj [::load-channel-schedule channel-id]))}))))
-
-(rf/reg-event-fx
- ::load-channel-schedule
- (fn [{:keys [db]} [_ channel-id]]
-   {:db       (assoc db :channel-schedule-loading? true)
-    :dispatch [::martian/request
-               :get-api-channels-id-schedule
-               {::martian/instance-id :pseudovision
-                :id channel-id}
-               [::load-channel-schedule-success channel-id]
-               [::load-channel-schedule-failure channel-id]]}))
-
-(rf/reg-event-db
- ::load-channel-schedule-success
- (fn [db [_ channel-id response]]
-   (let [body  (:body response)
-         items (if (map? body) (:items body) body)]
-     (-> db
-         (assoc-in [:channel-schedules channel-id] items)
-         (assoc :channel-schedule-loading? false)))))
-
-(rf/reg-event-db
- ::load-channel-schedule-failure
- (fn [db [_ channel-id response]]
-   (js/console.error "Failed to load channel schedule:" channel-id response)
-   (-> db
-       (assoc-in [:channel-schedules channel-id] [])
-       (assoc :channel-schedule-loading? false))))
+                      need-channels? (conj [::load-channels])
+                      need-events?   (conj [::load-channel-events channel-id]))})))
