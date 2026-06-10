@@ -16,6 +16,7 @@
 (defn ^:export init []
   (api/bootstrap!)
   (rf/dispatch-sync [::events/initialize-db])
+  (rf/dispatch [::events/load-app-config])
   (rf/dispatch-sync [::events/restore-from-url (.. js/window -location -pathname)])
   (.addEventListener js/window "popstate"
     (fn [_] (rf/dispatch [::events/restore-from-url (.. js/window -location -pathname)])))

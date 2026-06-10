@@ -13,3 +13,7 @@ export TUNARR_SCHEDULER_TOKEN=  # optional, leave empty if no auth required
 # Tunabrain service (future integration)
 export TUNABRAIN_URL=https://tunabrain.kube.sea.fudo.link
 export TUNABRAIN_TOKEN=  # optional, leave empty if no auth required
+
+# Jellyfin media server (optional — enables thumbnails and direct links)
+export JELLYFIN_URL=https://jellyfin.example.com
+export JELLYFIN_TOKEN=  # optional API token (x-emby-token)

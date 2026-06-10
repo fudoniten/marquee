@@ -7,8 +7,19 @@
                                              card-description card-content
                                              card-footer]]))
 
-(defn media-item-card [{:keys [id name title description kind duration]}]
-  [card {:class "mb-4"}
+(defn- jellyfin-image-url [remote-key]
+  (str "/api/jellyfin/Items/" remote-key "/Images/Primary?maxHeight=240&quality=85"))
+
+(defn media-item-card [{:keys [id name title description kind duration remote-key]}]
+  [card {:class "mb-4 overflow-hidden"}
+   (when remote-key
+     [:div {:class "w-full bg-muted flex items-center justify-center overflow-hidden" :style {:max-height "160px"}}
+      [:img {:src     (jellyfin-image-url remote-key)
+             :alt     (or title name "")
+             :class   "w-full object-cover object-top"
+             :style   {:max-height "160px"}
+             :loading "lazy"
+             :on-error #(-> % .-target .-parentElement .-style (aset "display" "none"))}]])
    [card-header {}
     [card-title {} (or title name (str "Item #" id))]
     (when kind
@@ -19,7 +30,7 @@
     (when duration
       [:p {:class "text-xs text-muted-foreground"}
        (str "Duration: " (js/Math.floor (/ duration 60)) " min")])]
-   [card-footer {}
+   [card-footer {:class "flex gap-2"}
     [button {:size :sm
              :variant :outline
              :on-click #(rf/dispatch [::events/navigate-to-media-detail id])}

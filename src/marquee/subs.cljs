@@ -22,6 +22,11 @@
      (or (empty? instances)
          (every? (comp boolean :m) instances)))))
 
+(rf/reg-sub
+ ::jellyfin-url
+ (fn [db _]
+   (:jellyfin-url db)))
+
 ;; Media subscriptions
 
 (rf/reg-sub

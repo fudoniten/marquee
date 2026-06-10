@@ -103,6 +103,23 @@
      :headers (dissoc (:headers response) "transfer-encoding" "content-length")
      :body    (:body response)}))
 
+(defn- proxy-to-jellyfin [req]
+  (let [{:keys [url token]} config/jellyfin
+        path     (subs (:uri req) (count "/api/jellyfin"))
+        target   (str url path)
+        headers  (cond-> (dissoc (:headers req) "host" "content-length")
+                   token (assoc "x-emby-token" token))
+        response (client/request {:method          (:request-method req)
+                                  :url             target
+                                  :query-string    (:query-string req)
+                                  :headers         headers
+                                  :body            (:body req)
+                                  :as              :stream
+                                  :throw-exceptions false})]
+    {:status  (:status response)
+     :headers (dissoc (:headers response) "transfer-encoding" "content-length")
+     :body    (:body response)}))
+
 (defn- service-id [uri]
   (when-let [[_ id] (re-find #"^/api/([^/]+)" uri)]
     (keyword id)))
@@ -112,6 +129,16 @@
         sid  (service-id uri)
         svc  (and sid (get config/services sid))]
     (cond
+      ;; Public config for frontend (Jellyfin URL for direct links).
+      (= uri "/api/config")
+      (resp/response {:jellyfin-url (:url config/jellyfin)})
+
+      ;; Proxy to Jellyfin (images, metadata). Token is added server-side.
+      (str/starts-with? uri "/api/jellyfin")
+      (if (:url config/jellyfin)
+        (proxy-to-jellyfin req)
+        {:status 503 :body {:error "Jellyfin not configured (JELLYFIN_URL not set)"}})
+
       (nil? sid)
       ;; SPA catch-all: serve index.html for any non-API path so that
       ;; deep links and browser back/forward work with pushState routing.

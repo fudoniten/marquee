@@ -16,6 +16,11 @@
                :token     (env "TUNABRAIN_TOKEN")
                :spec-path (env "TUNABRAIN_SPEC_PATH" "/openapi.json")}})
 
+;; Jellyfin is optional and not an OpenAPI-managed service.
+(def jellyfin
+  {:url   (env "JELLYFIN_URL")
+   :token (env "JELLYFIN_TOKEN")})
+
 (defn- url-env-var [service-id]
   (str (-> service-id name (.replace "-" "_") .toUpperCase) "_URL"))
 
