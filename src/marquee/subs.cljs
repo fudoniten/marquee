@@ -122,3 +122,50 @@
  ::api-filter
  (fn [db _]
    (:api-filter db "")))
+
+;; ---------------------------------------------------------------------------
+;; Schedule / guide subscriptions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-sub
+ ::channels
+ (fn [db _] (:channels db)))
+
+(rf/reg-sub
+ ::channels-loading?
+ (fn [db _] (:channels-loading? db false)))
+
+(rf/reg-sub
+ ::schedule-window-start
+ (fn [db _] (:schedule-window-start db (.getTime (js/Date.)))))
+
+(rf/reg-sub
+ ::all-channel-events
+ (fn [db _] (:channel-events db {})))
+
+(rf/reg-sub
+ ::channel-events-loading?
+ (fn [db _] (boolean (seq (:channel-events-loading db)))))
+
+(rf/reg-sub
+ ::current-channel-id
+ (fn [db _] (:current-channel-id db)))
+
+(rf/reg-sub
+ ::current-channel
+ :<- [::channels]
+ :<- [::current-channel-id]
+ (fn [[channels id] _]
+   (when (and channels id)
+     (first (filter #(= (:id %) id) channels)))))
+
+(rf/reg-sub
+ ::current-channel-events
+ (fn [db _]
+   (let [id (:current-channel-id db)]
+     (get-in db [:channel-events id]))))
+
+(rf/reg-sub
+ ::channel-events-loading-for?
+ (fn [db [_ channel-id]]
+   (contains? (:channel-events-loading db #{}) channel-id)))
