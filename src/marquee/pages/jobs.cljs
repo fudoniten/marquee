@@ -11,17 +11,59 @@
       (.toLocaleString (js/Date. s))
       (catch :default _ s))))
 
+(defn- format-duration [ms]
+  (when (and ms (>= ms 0))
+    (let [total-s (quot ms 1000)
+          h (quot total-s 3600)
+          m (quot (rem total-s 3600) 60)
+          s (rem total-s 60)]
+      (cond
+        (pos? h) (str h "h " m "m")
+        (pos? m) (str m "m " s "s")
+        :else    (str s "s")))))
+
 (defn- status-badge [status]
   (let [[label cls] (case (keyword status)
-                      :running  ["Running"  "bg-blue-100 text-blue-800 border-blue-300"]
-                      :pending  ["Pending"  "bg-yellow-100 text-yellow-800 border-yellow-300"]
-                      :complete ["Complete" "bg-green-100 text-green-800 border-green-300"]
-                      :error    ["Error"    "bg-red-100 text-red-800 border-red-300"]
-                      [status   "bg-muted text-muted-foreground border-border"])]
+                      :running   ["Running"   "bg-blue-100 text-blue-800 border-blue-300"]
+                      :queued    ["Queued"    "bg-yellow-100 text-yellow-800 border-yellow-300"]
+                      :pending   ["Pending"   "bg-yellow-100 text-yellow-800 border-yellow-300"]
+                      :succeeded ["Succeeded" "bg-green-100 text-green-800 border-green-300"]
+                      :complete  ["Complete"  "bg-green-100 text-green-800 border-green-300"]
+                      :failed    ["Failed"    "bg-red-100 text-red-800 border-red-300"]
+                      :error     ["Error"     "bg-red-100 text-red-800 border-red-300"]
+                      [status    "bg-muted text-muted-foreground border-border"])]
     [:span {:class (str "text-xs font-medium px-2 py-0.5 rounded border " cls)}
      label]))
 
-(defn- job-row [{:keys [id type status library created-at completed-at error result]}]
+(defn- progress-section
+  "Rich progress for item-based jobs: bar, done/failed/skipped counts,
+   current item, and phase."
+  [{:keys [phase total completed failed skipped current-item]} running?]
+  (let [done (+ (or completed 0) (or failed 0) (or skipped 0))
+        pct  (when (and total (pos? total))
+               (min 100 (js/Math.round (* 100 (/ done total)))))]
+    [:div {:class "mt-2 space-y-1"}
+     (when pct
+       [:div {:class "h-1.5 w-full max-w-md rounded bg-muted overflow-hidden"}
+        [:div {:class "h-full rounded bg-blue-500 transition-all"
+               :style {:width (str pct "%")}}]])
+     [:div {:class "text-xs text-muted-foreground flex gap-3 flex-wrap"}
+      (when phase
+        [:span {:class "font-medium"} phase])
+      (when total
+        [:span (str done " / " total " done" (when pct (str " (" pct "%)")))])
+      (when (and failed (pos? failed))
+        [:span {:class "text-red-600"} (str failed " failed")])
+      (when (and skipped (pos? skipped))
+        [:span (str skipped " skipped")])]
+     (when (and running? current-item)
+       (let [{:keys [name id]} current-item]
+         [:div {:class "text-xs text-muted-foreground truncate max-w-md"}
+          "Current: "
+          [:span {:class "text-foreground"} (or name id "—")]]))]))
+
+(defn- job-row [{:keys [type status library created-at completed-at error result
+                        progress duration-ms]}]
   [:div {:class "py-4 border-b last:border-0"}
    [:div {:class "flex items-start justify-between gap-4 flex-wrap"}
     [:div {:class "flex items-center gap-3 flex-wrap"}
@@ -33,10 +75,14 @@
      (when created-at
        [:span (str "Started " (format-ts created-at))])
      (when completed-at
-       [:span (str "Finished " (format-ts completed-at))])]]
+       [:span (str "Finished " (format-ts completed-at))])
+     (when-let [dur (format-duration duration-ms)]
+       [:span (str "Runtime " dur)])]]
+   (when (map? progress)
+     [progress-section progress (= :running (keyword status))])
    (when error
      [:div {:class "mt-2 p-2 rounded bg-red-50 border border-red-200 text-sm text-red-700 font-mono whitespace-pre-wrap"}
-      error])
+      (if (map? error) (or (:message error) (str error)) error)])
    (when (and result (map? result) (seq result))
      [:div {:class "mt-2 text-xs text-muted-foreground"}
       (for [[k v] result]
@@ -64,8 +110,9 @@
        [:p {:class "text-muted-foreground"} "No jobs found."]
 
        :else
-       (let [running  (filter #(#{:running :pending "running" "pending"} (:status %)) jobs)
-             finished (remove #(#{:running :pending "running" "pending"} (:status %)) jobs)]
+       (let [active?  #(contains? #{:running :pending :queued} (keyword (:status %)))
+             running  (filter active? jobs)
+             finished (remove active? jobs)]
          [:div {:class "space-y-6"}
           (when (seq running)
             [:div
