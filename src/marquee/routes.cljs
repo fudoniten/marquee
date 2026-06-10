@@ -6,7 +6,8 @@
    :media            "/media"
    :api-docs         "/api-docs"
    :schedule-grid    "/schedule"
-   :channel-schedule "/schedule/channel"})
+   :channel-schedule "/schedule/channel"
+   :jobs             "/jobs"})
 
 (defn media-detail-path [media-id]
   (str "/media/" media-id))
@@ -24,4 +25,6 @@
     (or (when-let [[_ id] (re-matches #"/media/(.+)" path)]
           {:page :media-detail :media-id id})
         (when-let [[_ id] (re-matches #"/schedule/channel/(.+)" path)]
-          {:page :channel-schedule :channel-id (js/parseInt id)}))))
+          {:page :channel-schedule :channel-id (js/parseInt id)})
+        (when (= path "/jobs")
+          {:page :jobs}))))

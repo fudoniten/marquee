@@ -169,3 +169,20 @@
  ::channel-events-loading-for?
  (fn [db [_ channel-id]]
    (contains? (:channel-events-loading db #{}) channel-id)))
+
+;; ---------------------------------------------------------------------------
+;; Jobs subscriptions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-sub
+ ::jobs
+ (fn [db _] (:jobs db)))
+
+(rf/reg-sub
+ ::jobs-loading?
+ (fn [db _] (:jobs-loading? db false)))
+
+(rf/reg-sub
+ ::action-state
+ (fn [db [_ action-key]]
+   (get-in db [:action-states action-key] {:status :idle})))

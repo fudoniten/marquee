@@ -34,7 +34,12 @@
     :channel-events {}           ; channel-id → [PlayoutEvent ...]
     :channel-events-loading #{}  ; set of channel-ids currently loading
     :schedule-window-start (.getTime (js/Date.))
-    :current-channel-id nil}))
+    :current-channel-id nil
+    ;; Jobs state
+    :jobs nil
+    :jobs-loading? false
+    ;; Action states: action-key → {:status :idle|:loading|:success|:error :message "..."}
+    :action-states {}}))
 
 (rf/reg-event-fx
  ::load-app-config
@@ -64,7 +69,9 @@
                       (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                         [[::select-api-service :pseudovision]])
                       (when (= page :schedule-grid)
-                        [[::load-channels]])]
+                        [[::load-channels]])
+                      (when (= page :jobs)
+                        [[::load-jobs]]))]
      (cond-> {:db           (assoc db :active-page page)
               :push-history (routes/page->path page)}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
@@ -407,3 +414,195 @@
       :dispatch-n   (cond-> []
                       need-channels? (conj [::load-channels])
                       need-events?   (conj [::load-channel-events channel-id]))})))
+
+;; ---------------------------------------------------------------------------
+;; Jobs
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::load-jobs
+ (fn [{:keys [db]} _]
+   {:db (assoc db :jobs-loading? true)
+    :dispatch [::martian/request
+               :get-api-jobs
+               {::martian/instance-id :tunarr-scheduler}
+               [::load-jobs-success]
+               [::load-jobs-failure]]}))
+
+(rf/reg-event-db
+ ::load-jobs-success
+ (fn [db [_ response]]
+   (let [body (:body response)
+         jobs (if (map? body) (or (:jobs body) (vals body)) body)]
+     (-> db
+         (assoc :jobs (vec (sort-by #(or (:created-at %) "") > (or jobs []))))
+         (assoc :jobs-loading? false)))))
+
+(rf/reg-event-db
+ ::load-jobs-failure
+ (fn [db [_ response]]
+   (js/console.error "Failed to load jobs:" response)
+   (-> db (assoc :jobs []) (assoc :jobs-loading? false))))
+
+;; ---------------------------------------------------------------------------
+;; Action state helpers
+;; ---------------------------------------------------------------------------
+
+(rf/reg-fx
+ ::timeout
+ (fn [{:keys [ms dispatch]}]
+   (js/setTimeout #(rf/dispatch dispatch) ms)))
+
+(rf/reg-event-db
+ ::set-action-state
+ (fn [db [_ action-key status message]]
+   (assoc-in db [:action-states action-key] {:status status :message message})))
+
+(rf/reg-event-fx
+ ::clear-action-state
+ (fn [{:keys [db]} [_ action-key]]
+   {:db (update db :action-states dissoc action-key)}))
+
+(defn- action-success-fx [action-key message]
+  {:dispatch-n [[::set-action-state action-key :success message]
+                [::load-jobs]]
+   ::timeout   {:ms 3000 :dispatch [::clear-action-state action-key]}})
+
+(defn- action-error-fx [action-key response]
+  (let [err (or (get-in response [:body :message])
+                (get-in response [:body :error])
+                (str "Error " (:status response)))]
+    {:dispatch   [::set-action-state action-key :error err]
+     ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+
+;; ---------------------------------------------------------------------------
+;; Pseudovision triggers
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::trigger-scan-library
+ (fn [{:keys [db]} [_ library-id]]
+   (let [k [:scan-library library-id]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-libraries-id-scan
+                 {::martian/instance-id :pseudovision
+                  :id library-id}
+                 [::trigger-scan-library-success library-id]
+                 [::trigger-scan-library-failure library-id]]})))
+
+(rf/reg-event-fx
+ ::trigger-scan-library-success
+ (fn [_ [_ library-id _response]]
+   (action-success-fx [:scan-library library-id] "Scan triggered")))
+
+(rf/reg-event-fx
+ ::trigger-scan-library-failure
+ (fn [_ [_ library-id response]]
+   (action-error-fx [:scan-library library-id] response)))
+
+(rf/reg-event-fx
+ ::trigger-rebuild-playout
+ (fn [{:keys [db]} [_ channel-id]]
+   (let [k [:rebuild-playout channel-id]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-channels-channel-id-playout
+                 {::martian/instance-id :pseudovision
+                  :channel-id channel-id}
+                 [::trigger-rebuild-playout-success channel-id]
+                 [::trigger-rebuild-playout-failure channel-id]]})))
+
+(rf/reg-event-fx
+ ::trigger-rebuild-playout-success
+ (fn [_ [_ channel-id _response]]
+   (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")))
+
+(rf/reg-event-fx
+ ::trigger-rebuild-playout-failure
+ (fn [_ [_ channel-id response]]
+   (action-error-fx [:rebuild-playout channel-id] response)))
+
+;; ---------------------------------------------------------------------------
+;; Tunarr-Scheduler triggers
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::trigger-sync-libraries
+ (fn [{:keys [db]} _]
+   {:db       (assoc-in db [:action-states :sync-libraries] {:status :loading})
+    :dispatch [::martian/request
+               :post-api-media-sync-libraries
+               {::martian/instance-id :tunarr-scheduler}
+               [::trigger-sync-libraries-success]
+               [::trigger-sync-libraries-failure]]}))
+
+(rf/reg-event-fx
+ ::trigger-sync-libraries-success
+ (fn [_ _]
+   (action-success-fx :sync-libraries "Libraries synced")))
+
+(rf/reg-event-fx
+ ::trigger-sync-libraries-failure
+ (fn [_ [_ response]]
+   (action-error-fx :sync-libraries response)))
+
+(rf/reg-event-fx
+ ::trigger-sync-channels
+ (fn [{:keys [db]} _]
+   {:db       (assoc-in db [:action-states :sync-channels] {:status :loading})
+    :dispatch [::martian/request
+               :post-api-channels-sync-pseudovision
+               {::martian/instance-id :tunarr-scheduler}
+               [::trigger-sync-channels-success]
+               [::trigger-sync-channels-failure]]}))
+
+(rf/reg-event-fx
+ ::trigger-sync-channels-success
+ (fn [_ _]
+   (action-success-fx :sync-channels "Channels synced")))
+
+(rf/reg-event-fx
+ ::trigger-sync-channels-failure
+ (fn [_ [_ response]]
+   (action-error-fx :sync-channels response)))
+
+(defn- library-action-op [action]
+  (case action
+    :rescan              :post-api-media-library-rescan
+    :retag               :post-api-media-library-retag
+    :add-taglines        :post-api-media-library-add-taglines
+    :recategorize        :post-api-media-library-recategorize
+    :retag-episodes      :post-api-media-library-retag-episodes
+    :sync-pseudovision-tags :post-api-media-library-sync-pseudovision-tags))
+
+(defn- library-action-label [action]
+  (case action
+    :rescan              "Rescan started"
+    :retag               "Retag started"
+    :add-taglines        "Tagline generation started"
+    :recategorize        "Recategorization started"
+    :retag-episodes      "Episode retag started"
+    :sync-pseudovision-tags "Tag sync started"))
+
+(rf/reg-event-fx
+ ::trigger-library-action
+ (fn [{:keys [db]} [_ action library-name]]
+   (let [k [action library-name]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 (library-action-op action)
+                 {::martian/instance-id :tunarr-scheduler
+                  :library library-name}
+                 [::trigger-library-action-success action library-name]
+                 [::trigger-library-action-failure action library-name]]})))
+
+(rf/reg-event-fx
+ ::trigger-library-action-success
+ (fn [_ [_ action library-name _response]]
+   (action-success-fx [action library-name] (library-action-label action))))
+
+(rf/reg-event-fx
+ ::trigger-library-action-failure
+ (fn [_ [_ action library-name response]]
+   (action-error-fx [action library-name] response)))
