@@ -122,3 +122,45 @@
  ::api-filter
  (fn [db _]
    (:api-filter db "")))
+
+;; ---------------------------------------------------------------------------
+;; Schedule / guide subscriptions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-sub
+ ::channels
+ (fn [db _] (:channels db)))
+
+(rf/reg-sub
+ ::schedule-grid
+ (fn [db _] (:schedule-grid db {})))
+
+(rf/reg-sub
+ ::schedule-loading?
+ (fn [db _] (:schedule-loading? db false)))
+
+(rf/reg-sub
+ ::schedule-window-start
+ (fn [db _] (:schedule-window-start db (.getTime (js/Date.)))))
+
+(rf/reg-sub
+ ::current-channel-id
+ (fn [db _] (:current-channel-id db)))
+
+(rf/reg-sub
+ ::current-channel
+ :<- [::channels]
+ :<- [::current-channel-id]
+ (fn [[channels id] _]
+   (when (and channels id)
+     (first (filter #(= (:id %) id) channels)))))
+
+(rf/reg-sub
+ ::current-channel-schedule
+ (fn [db _]
+   (let [id (:current-channel-id db)]
+     (get-in db [:channel-schedules id]))))
+
+(rf/reg-sub
+ ::channel-schedule-loading?
+ (fn [db _] (:channel-schedule-loading? db false)))
