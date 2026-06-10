@@ -183,8 +183,7 @@
    (let [item       (:body response)
          remote-key (:remote-key item)
          db         (assoc-in db [:media-items media-id] item)]
-     ;; Tunarr Scheduler syncs from Pseudovision but keys its catalog by the
-     ;; Jellyfin remote-key, not Pseudovision's numeric id.
+     ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
      (if remote-key
        {:db db :dispatch [::load-scheduler-metadata media-id remote-key]}
        {:db (assoc-in db [:scheduler-metadata media-id] false)}))))
@@ -198,13 +197,12 @@
 (rf/reg-event-fx
  ::load-scheduler-metadata
  (fn [{:keys [db]} [_ media-id remote-key]]
-   ;; remote-key is the Jellyfin id Tunarr Scheduler uses as its catalog id;
-   ;; results are stored under the Pseudovision media-id for the UI.
+   ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
    {:db db
     :dispatch [::martian/request
                :get-api-media-item-media-id
                {::martian/instance-id :tunarr-scheduler
-                :media-id (str remote-key)}
+                :media-id (str media-id)}
                [::load-scheduler-metadata-success media-id]
                [::load-scheduler-metadata-failure media-id]]}))
 
