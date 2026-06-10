@@ -21,10 +21,30 @@
     :selected-library-id nil
     :media-current-page 1
     :media-page-size 20
+    :jellyfin-url nil
     :api-specs {}
     :api-selected-service nil
     :api-expanded-ops #{}
     :api-filter ""}))
+
+(rf/reg-event-fx
+ ::load-app-config
+ (fn [{:keys [db]} _]
+   {:db db
+    ::fetch-json {:url        "/api/config"
+                  :on-success [::load-app-config-success]
+                  :on-failure [::load-app-config-failure]}}))
+
+(rf/reg-event-db
+ ::load-app-config-success
+ (fn [db [_ config]]
+   (assoc db :jellyfin-url (get config "jellyfin-url"))))
+
+(rf/reg-event-db
+ ::load-app-config-failure
+ (fn [db [_ err]]
+   (js/console.warn "Could not load app config:" err)
+   db))
 
 (rf/reg-event-fx
  ::navigate
