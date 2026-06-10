@@ -8,7 +8,8 @@
             [marquee.pages.media :as media]
             [marquee.pages.media-detail :as media-detail]
             [marquee.pages.api-docs :as api-docs]
-            [marquee.pages.schedule :as schedule]))
+            [marquee.pages.schedule :as schedule]
+            [marquee.pages.jobs :as jobs]))
 
 (def pages
   {:home             {:label "Home"     :view home/page          :show-in-nav true}
@@ -16,6 +17,7 @@
    :media            {:label "Media"    :view media/page         :show-in-nav true}
    :api-docs         {:label "API Docs" :view api-docs/page      :show-in-nav true}
    :schedule-grid    {:label "Guide"    :view schedule/grid-page :show-in-nav true}
+   :jobs             {:label "Jobs"     :view jobs/page          :show-in-nav true}
    :channel-schedule {:label "Schedule" :view schedule/channel-page :show-in-nav false}
    :media-detail     {:label "Media Detail" :view media-detail/page :show-in-nav false}})
 

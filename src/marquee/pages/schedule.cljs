@@ -8,6 +8,26 @@
             [marquee.components.button :refer [button]]
             [marquee.components.card :refer [card card-content]]))
 
+(defn- action-btn
+  [{:keys [action-key label on-click variant size]}]
+  (let [{:keys [status message]} @(rf/subscribe [::subs/action-state action-key])
+        loading? (= status :loading)]
+    [:div {:class "flex flex-col items-start gap-0.5"}
+     [button {:size     (or size :sm)
+              :variant  (case status
+                          :error   :destructive
+                          :success :secondary
+                          (or variant :outline))
+              :disabled loading?
+              :on-click on-click}
+      (case status
+        :loading (str label "…")
+        :success (or message label)
+        :error   "Error"
+        label)]
+     (when (= status :error)
+       [:p {:class "text-xs text-destructive max-w-48 truncate" :title message} message])]))
+
 ;; ---------------------------------------------------------------------------
 ;; Time helpers
 ;; ---------------------------------------------------------------------------
@@ -124,7 +144,7 @@
       [:div
        [:h1 {:class "text-3xl font-bold tracking-tight"} "Guide"]
        [:p {:class "text-muted-foreground"} "What's playing across all channels."]]
-      [:div {:class "flex items-center gap-2"}
+      [:div {:class "flex items-center gap-2 flex-wrap"}
        [button {:size :sm :variant :outline
                 :on-click #(rf/dispatch [::events/schedule-window-back])}
         "← Back"]
@@ -133,7 +153,11 @@
         "Now"]
        [button {:size :sm :variant :outline
                 :on-click #(rf/dispatch [::events/schedule-window-forward])}
-        "Forward →"]]]
+        "Forward →"]
+       [:div {:class "w-px h-5 bg-border"}]
+       [action-btn {:action-key :sync-channels
+                    :label      "Sync Channels"
+                    :on-click   #(rf/dispatch [::events/trigger-sync-channels])}]]]
 
      (cond
        loading?
@@ -189,15 +213,20 @@
         (or (:name channel) "Schedule")]
        (when (:description channel)
          [:p {:class "text-muted-foreground"} (:description channel)])]
-      (when (seq channels)
-        [:select {:class     "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
-                  :value     (or (:id channel) "")
-                  :on-change #(rf/dispatch [::events/navigate-to-channel
-                                            (js/parseInt (.. % -target -value))])}
-         [:option {:value "" :disabled true} "Select channel…"]
-         (for [ch channels]
-           ^{:key (:id ch)}
-           [:option {:value (:id ch)} (:name ch)])])]
+      [:div {:class "flex items-center gap-2 flex-wrap"}
+       (when (:id channel)
+         [action-btn {:action-key [:rebuild-playout (:id channel)]
+                      :label      "Rebuild Playout"
+                      :on-click   #(rf/dispatch [::events/trigger-rebuild-playout (:id channel)])}])
+       (when (seq channels)
+         [:select {:class     "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                   :value     (or (:id channel) "")
+                   :on-change #(rf/dispatch [::events/navigate-to-channel
+                                             (js/parseInt (.. % -target -value))])}
+          [:option {:value "" :disabled true} "Select channel…"]
+          (for [ch channels]
+            ^{:key (:id ch)}
+            [:option {:value (:id ch)} (:name ch)])])]]
 
      (cond
        loading?

@@ -7,6 +7,27 @@
                                              card-description card-content
                                              card-footer]]))
 
+(defn- action-btn
+  "Button that tracks a re-frame action-key for loading/success/error state."
+  [{:keys [action-key label on-click variant size]}]
+  (let [{:keys [status message]} @(rf/subscribe [::subs/action-state action-key])
+        loading? (= status :loading)]
+    [:div {:class "flex flex-col items-start gap-0.5"}
+     [button {:size     (or size :sm)
+              :variant  (case status
+                          :error   :destructive
+                          :success :secondary
+                          (or variant :outline))
+              :disabled loading?
+              :on-click on-click}
+      (case status
+        :loading (str label "…")
+        :success (or message label)
+        :error   (str "Error")
+        label)]
+     (when (= status :error)
+       [:p {:class "text-xs text-destructive max-w-48 truncate" :title message} message])]))
+
 (defn- jellyfin-image-url [remote-key]
   (str "/api/jellyfin/Items/" remote-key "/Images/Primary?maxHeight=240&quality=85"))
 
@@ -95,9 +116,41 @@
      (when (and (not (nil? libraries)) (empty? libraries))
        [:p {:class "text-muted-foreground"} "No libraries found."])
 
-     ;; Library selector
+     ;; Library selector + global actions
      (when (seq libraries)
-       [library-selector libraries selected-library-id])
+       [:div {:class "space-y-3"}
+        [library-selector libraries selected-library-id]
+        [:div {:class "flex items-center gap-2 flex-wrap"}
+         [action-btn {:action-key :sync-libraries
+                      :label      "Sync Libraries"
+                      :on-click   #(rf/dispatch [::events/trigger-sync-libraries])}]]])
+
+     ;; Per-library actions
+     (when selected-library-id
+       (let [lib-name (:name selected-library)]
+         [:div {:class "flex items-center gap-2 flex-wrap border-t pt-3"}
+          [:span {:class "text-xs text-muted-foreground mr-1"} "Library actions:"]
+          [action-btn {:action-key [:scan-library selected-library-id]
+                       :label      "Scan"
+                       :on-click   #(rf/dispatch [::events/trigger-scan-library selected-library-id])}]
+          [action-btn {:action-key [:rescan lib-name]
+                       :label      "Rescan"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :rescan lib-name])}]
+          [action-btn {:action-key [:retag lib-name]
+                       :label      "Retag"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :retag lib-name])}]
+          [action-btn {:action-key [:add-taglines lib-name]
+                       :label      "Add Taglines"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :add-taglines lib-name])}]
+          [action-btn {:action-key [:recategorize lib-name]
+                       :label      "Recategorize"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :recategorize lib-name])}]
+          [action-btn {:action-key [:retag-episodes lib-name]
+                       :label      "Retag Episodes"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :retag-episodes lib-name])}]
+          [action-btn {:action-key [:sync-pseudovision-tags lib-name]
+                       :label      "Sync Tags → Pseudovision"
+                       :on-click   #(rf/dispatch [::events/trigger-library-action :sync-pseudovision-tags lib-name])}]]))
 
      ;; Selected library content
      (when selected-library-id
