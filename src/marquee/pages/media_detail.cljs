@@ -7,41 +7,101 @@
             [marquee.components.card :refer [card card-header card-title
                                              card-description card-content]]))
 
+(defn- key-name
+  "Short name of a map key, ignoring keyword namespaces. Tunarr Scheduler
+   responses use namespaced keys like :tunarr.scheduler.media/tags."
+  [k]
+  (if (keyword? k) (name k) (str k)))
+
 (defn- field-by-name
-  "Look up a value in a map by key name, ignoring keyword namespaces.
-   Tunarr Scheduler responses use namespaced keys like
-   :tunarr.scheduler.media/tags."
+  "Look up a value in a map by key name, ignoring keyword namespaces."
   [m k]
-  (some (fn [[mk v]] (when (= (name mk) k) v)) m))
+  (some (fn [[mk v]] (when (= (key-name mk) k) v)) m))
+
+(defn- humanize [k]
+  (-> (key-name k)
+      (str/replace "-" " ")
+      (str/replace "_" " ")
+      str/capitalize))
+
+(def ^:private iso-timestamp-re
+  #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}.*")
 
 (defn- display-str [v]
   (cond
-    (keyword? v) (name v)
-    (string? v)  v
-    :else        (str v)))
+    (keyword? v)
+    (name v)
 
-(defn raw-json [data]
-  [:details {:class "mt-4"}
-   [:summary {:class "text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground"}
-    "Raw JSON"]
-   [:pre {:class "text-xs bg-muted p-4 rounded-md overflow-x-auto mt-2"}
-    (js/JSON.stringify (clj->js data) nil 2)]])
+    ;; Render ISO timestamps in the viewer's locale.
+    (and (string? v) (re-matches iso-timestamp-re v))
+    (let [d (js/Date. v)]
+      (if (js/isNaN (.getTime d)) v (.toLocaleString d)))
+
+    (string? v)
+    v
+
+    :else
+    (str v)))
+
+(defn- blank-value? [v]
+  (or (nil? v)
+      (and (string? v) (str/blank? v))
+      (and (coll? v) (empty? v))))
+
+(defn chips [values]
+  [:div {:class "flex flex-wrap gap-1.5"}
+   (for [[i v] (map-indexed vector values)]
+     ^{:key i}
+     [:span {:class "inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"}
+      (display-str v)])])
+
+(declare render-value)
+
+(defn- nested-rows
+  "Render a nested map as label/value lines, e.g. process timestamps."
+  [m]
+  [:div {:class "space-y-1"}
+   (for [[k v] (sort-by (comp key-name first) m)]
+     ^{:key (key-name k)}
+     [:div {:class "flex flex-wrap gap-x-2 text-sm"}
+      [:span {:class "text-muted-foreground"} (str (humanize k) ":")]
+      [render-value v]])])
+
+(defn render-value [v]
+  (cond
+    (map? v)        [nested-rows v]
+    (sequential? v) (if (every? map? v)
+                      [:div {:class "space-y-2"}
+                       (for [[i m] (map-indexed vector v)]
+                         ^{:key i} [nested-rows m])]
+                      [chips v])
+    (set? v)        [chips (sort-by display-str v)]
+    :else           [:span {:class "break-all"} (display-str v)]))
 
 (defn field-row [label value]
-  (when (and value (not (and (string? value) (str/blank? value))))
+  (when-not (blank-value? value)
     [:div {:class "py-2 grid grid-cols-3 gap-4 border-b border-border/50 last:border-0"}
      [:dt {:class "text-sm font-medium text-muted-foreground"} label]
-     [:dd {:class "text-sm col-span-2 break-all"} (display-str value)]]))
+     [:dd {:class "text-sm col-span-2"} [render-value value]]]))
 
 (defn chip-list [label values]
   (when (seq values)
     [:div {:class "py-2"}
      [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} label]
-     [:div {:class "flex flex-wrap gap-1.5"}
-      (for [v values]
-        ^{:key (display-str v)}
-        [:span {:class "inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"}
-         (display-str v)])]]))
+     [chips values]]))
+
+(defn remaining-fields
+  "Render any fields not explicitly laid out above, so nothing in the
+   response is hidden. `shown` is a set of key names already displayed."
+  [m shown]
+  (let [extras (->> m
+                    (remove (fn [[k v]] (or (shown (key-name k)) (blank-value? v))))
+                    (sort-by (comp key-name first)))]
+    (when (seq extras)
+      [:dl {:class "border-t border-border/50 mt-2 pt-1"}
+       (for [[k v] extras]
+         ^{:key (key-name k)}
+         [field-row (humanize k) v])])))
 
 (defn loading-placeholder []
   [:div {:class "space-y-2 animate-pulse"}
@@ -78,7 +138,9 @@
          [:div {:class "pt-3"}
           [:p {:class "text-sm font-medium text-muted-foreground mb-1"} "Plot"]
           [:p {:class "text-sm leading-relaxed"} plot]])
-       [raw-json media-item]])]])
+       [remaining-fields media-item
+        #{"name" "kind" "year" "release-date" "content-rating" "state"
+          "id" "remote-key" "plot"}]])]])
 
 (defn scheduler-card [scheduler-metadata]
   [card {}
@@ -106,7 +168,9 @@
        [chip-list "Genres" (field-by-name scheduler-metadata "genres")]
        [chip-list "Channels" (field-by-name scheduler-metadata "channels")]
        [chip-list "Taglines" (field-by-name scheduler-metadata "taglines")]
-       [raw-json scheduler-metadata]])]])
+       [remaining-fields scheduler-metadata
+        #{"name" "type" "item-kind" "library-id" "premiere"
+          "tags" "genres" "channels" "taglines"}]])]])
 
 (defn page []
   (let [media-id @(rf/subscribe [::subs/current-media-id])
