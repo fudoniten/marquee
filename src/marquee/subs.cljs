@@ -186,3 +186,8 @@
  ::action-state
  (fn [db [_ action-key]]
    (get-in db [:action-states action-key] {:status :idle})))
+
+(rf/reg-sub
+ ::tag-task-options
+ (fn [db _]
+   (:tag-task-options db {:dry-run true :target-limit nil})))

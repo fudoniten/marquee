@@ -6,27 +6,8 @@
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
+            [marquee.components.action-button :refer [action-btn]]
             [marquee.components.card :refer [card card-content]]))
-
-(defn- action-btn
-  [{:keys [action-key label on-click variant size]}]
-  (let [{:keys [status message]} @(rf/subscribe [::subs/action-state action-key])
-        loading? (= status :loading)]
-    [:div {:class "flex flex-col items-start gap-0.5"}
-     [button {:size     (or size :sm)
-              :variant  (case status
-                          :error   :destructive
-                          :success :secondary
-                          (or variant :outline))
-              :disabled loading?
-              :on-click on-click}
-      (case status
-        :loading (str label "…")
-        :success (or message label)
-        :error   "Error"
-        label)]
-     (when (= status :error)
-       [:p {:class "text-xs text-destructive max-w-48 truncate" :title message} message])]))
 
 ;; ---------------------------------------------------------------------------
 ;; Time helpers

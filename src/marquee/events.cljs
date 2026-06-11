@@ -38,6 +38,9 @@
     ;; Jobs state
     :jobs nil
     :jobs-loading? false
+    ;; Options for the catalog-wide tag curation tasks (Jobs page panel).
+    ;; Dry-run defaults to on so nothing is deleted without reviewing first.
+    :tag-task-options {:dry-run true :target-limit nil}
     ;; Action states: action-key → {:status :idle|:loading|:success|:error :message "..."}
     :action-states {}}))
 
@@ -606,3 +609,65 @@
  ::trigger-library-action-failure
  (fn [_ [_ action library-name response]]
    (action-error-fx [action library-name] response)))
+
+;; ---------------------------------------------------------------------------
+;; Tag curation tasks (catalog-wide, async jobs in Tunarr Scheduler)
+;;
+;;   POST /api/media/tags/audit?dry-run=true
+;;     LLM audit of all tags; deletes those recommended for removal unless
+;;     dry-run. Report lands in the job result (:removed [{:tag :reason}]).
+;;   POST /api/media/tags/triage?dry-run=true&target-limit=N
+;;     LLM governance triage with usage counts; applies keep/drop/merge/rename
+;;     decisions unless dry-run (:decisions [{:tag :action :replacement
+;;     :rationale}]).
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-db
+ ::set-tag-task-option
+ (fn [db [_ k v]]
+   (assoc-in db [:tag-task-options k] v)))
+
+(rf/reg-event-fx
+ ::trigger-tag-audit
+ (fn [{:keys [db]} _]
+   (let [{:keys [dry-run]} (:tag-task-options db)]
+     {:db       (assoc-in db [:action-states :tag-audit] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-tags-audit
+                 {::martian/instance-id :tunarr-scheduler
+                  :dry-run (str (boolean dry-run))}
+                 [::trigger-tag-audit-success dry-run]
+                 [::trigger-tag-audit-failure]]})))
+
+(rf/reg-event-fx
+ ::trigger-tag-audit-success
+ (fn [_ [_ dry-run _response]]
+   (action-success-fx :tag-audit (if dry-run "Audit started (dry run)" "Audit started"))))
+
+(rf/reg-event-fx
+ ::trigger-tag-audit-failure
+ (fn [_ [_ response]]
+   (action-error-fx :tag-audit response)))
+
+(rf/reg-event-fx
+ ::trigger-tag-triage
+ (fn [{:keys [db]} _]
+   (let [{:keys [dry-run target-limit]} (:tag-task-options db)]
+     {:db       (assoc-in db [:action-states :tag-triage] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-tags-triage
+                 (cond-> {::martian/instance-id :tunarr-scheduler
+                          :dry-run (str (boolean dry-run))}
+                   target-limit (assoc :target-limit target-limit))
+                 [::trigger-tag-triage-success dry-run]
+                 [::trigger-tag-triage-failure]]})))
+
+(rf/reg-event-fx
+ ::trigger-tag-triage-success
+ (fn [_ [_ dry-run _response]]
+   (action-success-fx :tag-triage (if dry-run "Triage started (dry run)" "Triage started"))))
+
+(rf/reg-event-fx
+ ::trigger-tag-triage-failure
+ (fn [_ [_ response]]
+   (action-error-fx :tag-triage response)))
