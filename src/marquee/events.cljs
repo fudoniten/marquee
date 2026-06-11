@@ -138,10 +138,10 @@
                      (:items body)  ; New paginated format
                      body)          ; Fallback for non-paginated (backward compat)
          first-library (first libraries)]
-     {:db (assoc db :media-libraries libraries)
-      ;; Auto-select first library if none selected
-      :dispatch (when (and first-library (nil? (:selected-library-id db)))
-                  [::select-library (:id first-library)])})))
+     ;; Auto-select first library if none selected
+     (cond-> {:db (assoc db :media-libraries libraries)}
+       (and first-library (nil? (:selected-library-id db)))
+       (assoc :dispatch [::select-library (:id first-library)])))))
 
 (rf/reg-event-db
  ::load-media-libraries-failure
@@ -233,11 +233,11 @@
  ::select-library
  (fn [{:keys [db]} [_ library-id]]
    (let [already-loaded? (get-in db [:library-items library-id])]
-     {:db (-> db
-              (assoc :selected-library-id library-id)
-              (assoc :media-current-page 1))
-      :dispatch (when-not already-loaded?
-                  [::load-library-items library-id])})))
+     (cond-> {:db (-> db
+                      (assoc :selected-library-id library-id)
+                      (assoc :media-current-page 1))}
+       (not already-loaded?)
+       (assoc :dispatch [::load-library-items library-id])))))
 
 (rf/reg-event-db
  ::set-media-page
