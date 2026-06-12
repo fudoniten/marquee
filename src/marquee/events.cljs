@@ -8,6 +8,15 @@
  (fn [path]
    (.pushState js/history nil "" path)))
 
+;; The raw cljs-http response map prints as an opaque CLJS object in the
+;; browser console, so surface the status and body readably instead.
+(defn- log-request-failure [message {:keys [status error-text body]}]
+  (js/console.error message
+                    (str "status=" status
+                         (when-not (empty? error-text)
+                           (str " (" error-text ")")))
+                    (pr-str body)))
+
 (def ^:private grid-window-ms (* 2 60 60 1000))
 
 (rf/reg-event-db
@@ -163,7 +172,7 @@
 (rf/reg-event-db
  ::load-media-libraries-failure
  (fn [db [_ response]]
-   (js/console.error "Failed to load libraries:" response)
+   (log-request-failure "Failed to load libraries:" response)
    (assoc db :media-libraries [])))
 
 (rf/reg-event-fx
@@ -190,7 +199,7 @@
 (rf/reg-event-db
  ::load-library-items-failure
  (fn [db [_ library-id response]]
-   (js/console.error "Failed to load library items:" library-id response)
+   (log-request-failure (str "Failed to load library items: " library-id) response)
    (assoc-in db [:library-items library-id] [])))
 
 (rf/reg-event-fx
@@ -218,7 +227,7 @@
 (rf/reg-event-db
  ::load-media-item-failure
  (fn [db [_ media-id response]]
-   (js/console.error "Failed to load media item:" media-id response)
+   (log-request-failure (str "Failed to load media item: " media-id) response)
    (assoc-in db [:media-items media-id] false)))
 
 (rf/reg-event-fx
@@ -241,7 +250,7 @@
 (rf/reg-event-db
  ::load-scheduler-metadata-failure
  (fn [db [_ media-id response]]
-   (js/console.error "Failed to load scheduler metadata:" media-id response)
+   (log-request-failure (str "Failed to load scheduler metadata: " media-id) response)
    (assoc-in db [:scheduler-metadata media-id] false)))
 
 ;; Library selection and pagination events
@@ -326,7 +335,7 @@
 (rf/reg-event-db
  ::load-browse-facet-failure
  (fn [db [_ facet response]]
-   (js/console.error "Failed to load browse facet:" (name facet) response)
+   (log-request-failure (str "Failed to load browse facet: " (name facet)) response)
    (assoc-in db [:browse-lists facet] [])))
 
 (rf/reg-event-fx
@@ -352,7 +361,7 @@
 (rf/reg-event-db
  ::load-browse-media-failure
  (fn [db [_ facet value response]]
-   (js/console.error "Failed to load media for" (name facet) value response)
+   (log-request-failure (str "Failed to load media for " (name facet) " " value) response)
    (assoc-in db [:browse-media [facet value]] [])))
 
 (rf/reg-event-fx
@@ -495,7 +504,7 @@
 (rf/reg-event-db
  ::load-channels-failure
  (fn [db [_ response]]
-   (js/console.error "Failed to load channels:" response)
+   (log-request-failure "Failed to load channels:" response)
    (-> db (assoc :channels []) (assoc :channels-loading? false))))
 
 ;; Load playout events for a single channel (for guide grid or channel page).
@@ -524,7 +533,7 @@
 (rf/reg-event-db
  ::load-channel-events-failure
  (fn [db [_ channel-id response]]
-   (js/console.error "Failed to load channel events:" channel-id response)
+   (log-request-failure (str "Failed to load channel events: " channel-id) response)
    (-> db
        (assoc-in [:channel-events channel-id] [])
        (update :channel-events-loading disj channel-id))))
@@ -590,7 +599,7 @@
 (rf/reg-event-db
  ::load-jobs-failure
  (fn [db [_ response]]
-   (js/console.error "Failed to load jobs:" response)
+   (log-request-failure "Failed to load jobs:" response)
    (-> db (assoc :jobs []) (assoc :jobs-loading? false))))
 
 ;; ---------------------------------------------------------------------------
