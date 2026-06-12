@@ -38,12 +38,21 @@
 
 ;;; ── Rendering primitives ────────────────────────────────────────────────────
 
-(defn chips [values]
-  [:div {:class "flex flex-wrap gap-1.5"}
-   (for [[i v] (map-indexed vector values)]
-     ^{:key i}
-     [:span {:class "inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"}
-      (display-str v)])])
+(defn chips
+  "Render values as chips. With `on-click`, chips become buttons and the
+  handler is called with the chip's display string."
+  ([values] [chips values nil])
+  ([values on-click]
+   [:div {:class "flex flex-wrap gap-1.5"}
+    (for [[i v] (map-indexed vector values)
+          :let [label (display-str v)]]
+      ^{:key i}
+      (if on-click
+        [:button {:class "inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-secondary/70"
+                  :on-click #(on-click label)}
+         label]
+        [:span {:class "inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"}
+         label]))]))
 
 (declare render-value)
 
@@ -72,11 +81,13 @@
      [:dt {:class "text-sm font-medium text-muted-foreground"} label]
      [:dd {:class "text-sm col-span-2"} [render-value value]]]))
 
-(defn chip-list [label values]
-  (when (seq values)
-    [:div {:class "py-2"}
-     [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} label]
-     [chips values]]))
+(defn chip-list
+  ([label values] [chip-list label values nil])
+  ([label values on-click]
+   (when (seq values)
+     [:div {:class "py-2"}
+      [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} label]
+      [chips values on-click]])))
 
 (defn remaining-fields
   "Render any fields not in `shown`, so nothing is hidden."
@@ -190,9 +201,12 @@
         [field-row "Pseudovision ID" (:id merged)]
         [field-row "Jellyfin ID"    remote-key]
         [parent-field-row (:parent-id merged) jellyfin-url]]
-       [chip-list "Tags"     (or (field-by-name merged "tags")     (:tags merged))]
-       [chip-list "Genres"   (or (field-by-name merged "genres")   (:genres merged))]
-       [chip-list "Channels" (or (field-by-name merged "channels") (:channels merged))]
+       [chip-list "Tags"     (or (field-by-name merged "tags")     (:tags merged))
+        #(rf/dispatch [::events/browse-select-item :tags %])]
+       [chip-list "Genres"   (or (field-by-name merged "genres")   (:genres merged))
+        #(rf/dispatch [::events/browse-select-item :genres %])]
+       [chip-list "Channels" (or (field-by-name merged "channels") (:channels merged))
+        #(rf/dispatch [::events/browse-select-item :channels %])]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
        [remaining-fields merged known-fields]])]])
 

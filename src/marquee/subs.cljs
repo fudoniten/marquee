@@ -101,6 +101,40 @@
        (js/Math.ceil (/ (count items) page-size))
        0))))
 
+;; ---------------------------------------------------------------------------
+;; Browse by metadata subscriptions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-sub
+ ::browse-facet
+ (fn [db _]
+   (:browse-facet db :tags)))
+
+(rf/reg-sub
+ ::browse-selection
+ (fn [db _]
+   (:browse-selection db)))
+
+(rf/reg-sub
+ ::browse-list
+ (fn [db [_ facet]]
+   (get-in db [:browse-lists facet])))
+
+(rf/reg-sub
+ ::browse-filter
+ (fn [db _]
+   (:browse-filter db "")))
+
+(rf/reg-sub
+ ::browse-media
+ (fn [db [_ facet value]]
+   (get-in db [:browse-media [facet value]])))
+
+(rf/reg-sub
+ ::browse-media-page
+ (fn [db _]
+   (:browse-media-page db 1)))
+
 ;; API documentation browser subscriptions
 
 (rf/reg-sub

@@ -1,23 +1,27 @@
 (ns marquee.components.card
-  "shadcn/ui Card family, as Reagent components."
+  "shadcn/ui Card family, as Reagent components. Props besides :class
+  (e.g. :on-click) are passed through to the underlying element."
   (:require [marquee.lib.utils :refer [cn]]))
 
-(defn card [{:keys [class]} & children]
-  (into [:div {:class (cn "rounded-lg border bg-card text-card-foreground shadow-sm" class)}]
+(defn- with-classes [props base]
+  (assoc (dissoc props :class) :class (cn base (:class props))))
+
+(defn card [props & children]
+  (into [:div (with-classes props "rounded-lg border bg-card text-card-foreground shadow-sm")]
         children))
 
-(defn card-header [{:keys [class]} & children]
-  (into [:div {:class (cn "flex flex-col space-y-1.5 p-6" class)}] children))
+(defn card-header [props & children]
+  (into [:div (with-classes props "flex flex-col space-y-1.5 p-6")] children))
 
-(defn card-title [{:keys [class]} & children]
-  (into [:h3 {:class (cn "text-2xl font-semibold leading-none tracking-tight" class)}]
+(defn card-title [props & children]
+  (into [:h3 (with-classes props "text-2xl font-semibold leading-none tracking-tight")]
         children))
 
-(defn card-description [{:keys [class]} & children]
-  (into [:p {:class (cn "text-sm text-muted-foreground" class)}] children))
+(defn card-description [props & children]
+  (into [:p (with-classes props "text-sm text-muted-foreground")] children))
 
-(defn card-content [{:keys [class]} & children]
-  (into [:div {:class (cn "p-6 pt-0" class)}] children))
+(defn card-content [props & children]
+  (into [:div (with-classes props "p-6 pt-0")] children))
 
-(defn card-footer [{:keys [class]} & children]
-  (into [:div {:class (cn "flex items-center p-6 pt-0" class)}] children))
+(defn card-footer [props & children]
+  (into [:div (with-classes props "flex items-center p-6 pt-0")] children))
