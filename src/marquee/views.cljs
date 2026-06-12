@@ -7,6 +7,7 @@
             [marquee.pages.about :as about]
             [marquee.pages.media :as media]
             [marquee.pages.media-detail :as media-detail]
+            [marquee.pages.browse :as browse]
             [marquee.pages.api-docs :as api-docs]
             [marquee.pages.schedule :as schedule]
             [marquee.pages.jobs :as jobs]))
@@ -15,6 +16,7 @@
   {:home             {:label "Home"     :view home/page          :show-in-nav true}
    :about            {:label "About"    :view about/page         :show-in-nav true}
    :media            {:label "Media"    :view media/page         :show-in-nav true}
+   :browse           {:label "Browse"   :view browse/page        :show-in-nav true}
    :api-docs         {:label "API Docs" :view api-docs/page      :show-in-nav true}
    :schedule-grid    {:label "Guide"    :view schedule/grid-page :show-in-nav true}
    :jobs             {:label "Jobs"     :view jobs/page          :show-in-nav true}

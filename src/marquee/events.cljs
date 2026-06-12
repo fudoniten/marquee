@@ -24,6 +24,13 @@
     :media-current-page 1
     :media-page-size 20
     :jellyfin-url nil
+    ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
+    :browse-facet :tags          ; :tags | :genres | :channels
+    :browse-selection nil        ; selected tag/genre/channel name, or nil
+    :browse-lists {}             ; facet → vector of facet entries
+    :browse-media {}             ; [facet value] → vector of media items
+    :browse-media-page 1
+    :browse-filter ""
     :api-specs {}
     :api-selected-service nil
     :api-expanded-ops #{}
@@ -69,13 +76,16 @@
    (let [dispatches (concat
                       (when (= page :media)
                         [[::load-media-libraries] [::set-media-page 1]])
+                      (when (= page :browse)
+                        [[::load-browse-facet (or (:browse-facet db) :tags)]])
                       (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                         [[::select-api-service :pseudovision]])
                       (when (= page :schedule-grid)
                         [[::load-channels]])
                       (when (= page :jobs)
                         [[::load-jobs]]))]
-     (cond-> {:db           (assoc db :active-page page)
+     (cond-> {:db           (cond-> (assoc db :active-page page)
+                              (= page :browse) (assoc :browse-selection nil))
               :push-history (routes/page->path page)}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
 
@@ -94,7 +104,8 @@
 (rf/reg-event-fx
  ::restore-from-url
  (fn [{:keys [db]} [_ path]]
-   (let [{:keys [page media-id channel-id]} (or (routes/parse-path path) {:page :home})
+   (let [{:keys [page media-id channel-id facet selection]}
+         (or (routes/parse-path path) {:page :home})
          dispatches (concat
                       (when (= page :media)
                         [[::load-media-libraries] [::set-media-page 1]])
@@ -102,6 +113,9 @@
                         [[::select-api-service :pseudovision]])
                       (when (= page :media-detail)
                         [[::load-media-item media-id]])
+                      (when (= page :browse)
+                        (cond-> [[::load-browse-facet (or facet :tags)]]
+                          selection (conj [::load-browse-media (or facet :tags) selection])))
                       (when (= page :schedule-grid)
                         [[::load-channels]])
                       (when (= page :channel-schedule)
@@ -109,6 +123,9 @@
                           channel-id (conj [::load-channel-events channel-id]))))]
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media-detail)     (assoc :current-media-id media-id)
+                    (= page :browse)           (assoc :browse-facet (or facet :tags)
+                                                      :browse-selection selection
+                                                      :browse-media-page 1)
                     (= page :channel-schedule) (assoc :current-channel-id channel-id))}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
 
@@ -250,6 +267,135 @@
    (-> db
        (assoc :media-page-size size)
        (assoc :media-current-page 1))))
+
+;; ---------------------------------------------------------------------------
+;; Browse by metadata (Tunarr Scheduler browse endpoints)
+;;
+;;   GET /api/tags                                  → {:tags [{:tag :usage-count :example-titles}]}
+;;   GET /api/tags/:tag/media                       → {:media [...]}
+;;   GET /api/genres                                → {:genres ["..."]}
+;;   GET /api/genres/:genre/media                   → {:media [...]}
+;;   GET /api/catalog/channels                      → {:channels [{:name :full-name :description}]}
+;;   GET /api/catalog/channels/:channel-name/media  → {:media [...]}
+;;
+;; Media items come back with namespaced keys (tunarr.scheduler.media/name);
+;; we strip the namespaces on receipt so views can use plain :name, :tags, etc.
+;; ---------------------------------------------------------------------------
+
+(defn- key-name [k]
+  (if (keyword? k) (name k) (str k)))
+
+(defn- strip-key-namespaces [m]
+  (into {} (map (fn [[k v]] [(keyword (key-name k)) v])) m))
+
+(defn- browse-list-op [facet]
+  (case facet
+    :tags     :get-api-tags
+    :genres   :get-api-genres
+    :channels :get-api-catalog-channels))
+
+(defn- browse-media-request [facet value]
+  (case facet
+    :tags     [:get-api-tags-tag-media {:tag value}]
+    :genres   [:get-api-genres-genre-media {:genre value}]
+    :channels [:get-api-catalog-channels-channel-name-media {:channel-name value}]))
+
+(rf/reg-event-fx
+ ::load-browse-facet
+ (fn [{:keys [db]} [_ facet]]
+   ;; Facet lists are cached for the session; reload only when missing.
+   (if (get-in db [:browse-lists facet])
+     {:db db}
+     {:db db
+      :dispatch [::martian/request
+                 (browse-list-op facet)
+                 {::martian/instance-id :tunarr-scheduler}
+                 [::load-browse-facet-success facet]
+                 [::load-browse-facet-failure facet]]})))
+
+(rf/reg-event-db
+ ::load-browse-facet-success
+ (fn [db [_ facet response]]
+   (let [body  (:body response)
+         items (case facet
+                 :tags     (:tags body)
+                 :genres   (:genres body)
+                 :channels (:channels body))]
+     (assoc-in db [:browse-lists facet] (vec items)))))
+
+(rf/reg-event-db
+ ::load-browse-facet-failure
+ (fn [db [_ facet response]]
+   (js/console.error "Failed to load browse facet:" (name facet) response)
+   (assoc-in db [:browse-lists facet] [])))
+
+(rf/reg-event-fx
+ ::load-browse-media
+ (fn [{:keys [db]} [_ facet value]]
+   (if (get-in db [:browse-media [facet value]])
+     {:db db}
+     (let [[op params] (browse-media-request facet value)]
+       {:db db
+        :dispatch [::martian/request
+                   op
+                   (assoc params ::martian/instance-id :tunarr-scheduler)
+                   [::load-browse-media-success facet value]
+                   [::load-browse-media-failure facet value]]}))))
+
+(rf/reg-event-db
+ ::load-browse-media-success
+ (fn [db [_ facet value response]]
+   (let [media (->> (get-in response [:body :media])
+                    (mapv strip-key-namespaces))]
+     (assoc-in db [:browse-media [facet value]] media))))
+
+(rf/reg-event-db
+ ::load-browse-media-failure
+ (fn [db [_ facet value response]]
+   (js/console.error "Failed to load media for" (name facet) value response)
+   (assoc-in db [:browse-media [facet value]] [])))
+
+(rf/reg-event-fx
+ ::browse-select-facet
+ (fn [{:keys [db]} [_ facet]]
+   {:db           (assoc db
+                         :active-page :browse
+                         :browse-facet facet
+                         :browse-selection nil
+                         :browse-filter ""
+                         :browse-media-page 1)
+    :push-history (routes/browse-path facet)
+    :dispatch     [::load-browse-facet facet]}))
+
+(rf/reg-event-fx
+ ::browse-select-item
+ (fn [{:keys [db]} [_ facet value]]
+   {:db           (assoc db
+                         :active-page :browse
+                         :browse-facet facet
+                         :browse-selection value
+                         :browse-media-page 1)
+    :push-history (routes/browse-path facet value)
+    :dispatch-n   [[::load-browse-facet facet]
+                   [::load-browse-media facet value]]}))
+
+(rf/reg-event-fx
+ ::browse-clear-selection
+ (fn [{:keys [db]} [_]]
+   (let [facet (:browse-facet db :tags)]
+     {:db           (assoc db :browse-selection nil :browse-media-page 1)
+      :push-history (routes/browse-path facet)
+      :dispatch     [::load-browse-facet facet]})))
+
+(rf/reg-event-db
+ ::set-browse-filter
+ (fn [db [_ text]]
+   (assoc db :browse-filter text)))
+
+(rf/reg-event-db
+ ::set-browse-media-page
+ (fn [db [_ page]]
+   (assoc db :browse-media-page page)))
 
 ;; API documentation browser events
 
