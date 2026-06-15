@@ -140,7 +140,10 @@
      [card-footer {}
       [button {:size :sm
                :variant :outline
-               :on-click #(rf/dispatch [::events/navigate-to-media-detail id])}
+               ;; Browse items come from Tunarr Scheduler, whose catalog is keyed
+               ;; by the Jellyfin id — so this id is the Jellyfin id, not a
+               ;; Pseudovision numeric id.
+               :on-click #(rf/dispatch [::events/navigate-to-media-detail id :scheduler])}
        "View Details"]])])
 
 (defn pagination-controls [current-page total-pages]

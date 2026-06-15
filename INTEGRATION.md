@@ -141,8 +141,16 @@ Open http://localhost:8080 in your browser and click the "Media" tab.
 #### Metadata
 - `GET /api/media-item/{media-id}` - Get media item metadata
 
-> **ID mapping:** Tunarr Scheduler keys its catalog by Pseudovision's numeric `id`.
-> To fetch scheduler metadata, call this endpoint with the Pseudovision item's numeric `id`.
+> **ID mapping:** Tunarr Scheduler keys its catalog by the item's **Jellyfin id**
+> (Pseudovision's `remote-key`), *not* by Pseudovision's numeric `id`. The browse
+> endpoints (`/api/tags/:tag/media`, etc.) return items whose `id` is this Jellyfin
+> id. To fetch scheduler metadata for a Pseudovision item, first load it from
+> Pseudovision and call this endpoint with its `remote-key`.
+>
+> Pseudovision's own `GET /api/media/items/{id}` is keyed only by its numeric
+> `id` and cannot be looked up by Jellyfin id, so a media item reached from the
+> Browse page (which only knows the Jellyfin id) shows scheduler + Jellyfin data
+> without the extra Pseudovision-only fields.
 
 ## Making API Calls
 

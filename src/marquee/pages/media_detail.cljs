@@ -130,12 +130,12 @@
 
 (defn- hero-section
   "Thumbnail poster, title, badges, and Jellyfin link."
-  [{:keys [media-id media-item merged remote-key jf-link loading?]}]
+  [{:keys [media-id merged remote-key jf-link loading?]}]
   [:div {:class "flex gap-6 items-start"}
    (when remote-key
      [:div {:class "shrink-0 rounded-lg overflow-hidden bg-muted shadow-md" :style {:width "160px"}}
       [:img {:src      (jellyfin-image-url remote-key)
-             :alt      (or (:name media-item) "")
+             :alt      (or (:name merged) "")
              :class    "w-full object-cover"
              :loading  "lazy"
              :on-error #(-> % .-target .-parentElement .-style (aset "display" "none"))}]])
@@ -143,14 +143,15 @@
     [:h1 {:class "text-3xl font-bold tracking-tight"}
      (if loading?
        "Loading…"
-       (or (:name media-item) (str "Media Item #" media-id)))]
+       (or (:name merged) (str "Media Item #" media-id)))]
     [:div {:class "flex flex-wrap items-center gap-2 mt-2 text-muted-foreground"}
-     (when-let [kind (or (:kind media-item) (and merged (field-by-name merged "type")))]
+     (when-let [kind (or (:kind merged) (field-by-name merged "item-kind")
+                         (field-by-name merged "media-type") (field-by-name merged "type"))]
        [:span {:class "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize"}
         (display-str kind)])
-     (when-let [year (:year media-item)]
+     (when-let [year (or (:year merged) (field-by-name merged "production-year"))]
        [:span {:class "text-sm"} year])
-     (when-let [rating (:content-rating media-item)]
+     (when-let [rating (:content-rating merged)]
        [:span {:class "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium"}
         rating])]
     (when jf-link
@@ -176,29 +177,31 @@
         [:span (str parent-id)])]]))
 
 (def ^:private known-fields
-  #{"name" "kind" "type" "year" "release-date" "content-rating" "premiere"
-    "state" "id" "remote-key" "plot" "description" "tags" "genres"
-    "channels" "taglines" "parent-id"})
+  #{"name" "kind" "type" "media-type" "item-kind" "year" "production-year"
+    "release-date" "content-rating" "premiere" "state" "id" "remote-key"
+    "plot" "description" "overview" "tags" "genres" "channels" "taglines"
+    "parent-id"})
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key jellyfin-url loading?]}]
+  [{:keys [merged remote-key pseudovision-id jellyfin-url loading?]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
       [loading-placeholder]
       [:div
-       (when-let [plot (or (:plot merged) (:description merged))]
+       (when-let [plot (or (:plot merged) (:description merged) (field-by-name merged "overview"))]
          [:div {:class "mb-4"}
           [:p {:class "text-sm leading-relaxed text-muted-foreground"} plot]])
        [:dl
-        [field-row "Kind"           (or (:kind merged) (field-by-name merged "type"))]
-        [field-row "Year"           (:year merged)]
+        [field-row "Kind"           (or (:kind merged) (field-by-name merged "item-kind")
+                                        (field-by-name merged "media-type") (field-by-name merged "type"))]
+        [field-row "Year"           (or (:year merged) (field-by-name merged "production-year"))]
         [field-row "Release date"   (:release-date merged)]
         [field-row "Content rating" (:content-rating merged)]
         [field-row "Premiere"       (field-by-name merged "premiere")]
         [field-row "State"          (:state merged)]
-        [field-row "Pseudovision ID" (:id merged)]
+        [field-row "Pseudovision ID" pseudovision-id]
         [field-row "Jellyfin ID"    remote-key]
         [parent-field-row (:parent-id merged) jellyfin-url]]
        [chip-list "Tags"     (or (field-by-name merged "tags")     (:tags merged))
@@ -217,14 +220,24 @@
         media-item         @(rf/subscribe [::subs/media-item media-id])
         scheduler-metadata @(rf/subscribe [::subs/scheduler-metadata media-id])
         jellyfin-url       @(rf/subscribe [::subs/jellyfin-url])
-        loading?           (nil? media-item)
-        not-found?         (false? media-item)
-        remote-key         (:remote-key media-item)
+        pv-item            (when (map? media-item) media-item)
+        sched              (when (map? scheduler-metadata) scheduler-metadata)
+        ;; Either catalog can supply the item (Pseudovision when navigated by
+        ;; numeric id, Tunarr Scheduler when navigated by Jellyfin id). We're
+        ;; loading until one lookup resolves; "not found" only once one has
+        ;; resolved with nothing.
+        have-data?         (or pv-item sched)
+        loading?           (and (nil? media-item) (nil? scheduler-metadata))
+        not-found?         (and (not have-data?) (not loading?))
+        ;; The Jellyfin id (remote-key) drives the thumbnail and Jellyfin link.
+        ;; From Pseudovision it's the item's :remote-key; from the scheduler the
+        ;; canonical id we navigated with already IS the Jellyfin id.
+        remote-key         (or (:remote-key pv-item) (when-not pv-item media-id))
         jf-link            (jellyfin-item-url jellyfin-url remote-key)
-        merged             (when (map? media-item)
-                             (merge-metadata media-item scheduler-metadata))
-        ctx                {:media-id media-id :media-item media-item :merged merged
-                            :remote-key remote-key :jf-link jf-link
+        merged             (when have-data? (merge-metadata pv-item sched))
+        ctx                {:media-id media-id :merged merged
+                            :remote-key remote-key :pseudovision-id (:id pv-item)
+                            :jf-link jf-link
                             :jellyfin-url jellyfin-url :loading? loading?}]
     [:div {:class "space-y-6"}
      [:div

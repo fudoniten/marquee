@@ -19,6 +19,12 @@
 
 (def ^:private grid-window-ms (* 2 60 60 1000))
 
+;; A purely numeric id is a Pseudovision media id; anything else (a Jellyfin
+;; GUID) is the id Tunarr Scheduler and the browse endpoints key their catalog
+;; by. Used to pick the right lookup when only an id from a deep link is known.
+(defn- numeric-id? [id]
+  (boolean (re-matches #"\d+" (str id))))
+
 (rf/reg-event-db
  ::initialize-db
  (fn [_ _]
@@ -100,15 +106,21 @@
 
 (rf/reg-event-fx
  ::navigate-to-media-detail
- (fn [{:keys [db]} [_ media-id]]
+ ;; `source` indicates which catalog `media-id` belongs to:
+ ;;   :pseudovision (default) — media-id is Pseudovision's numeric id. Load the
+ ;;     Pseudovision item first; its :remote-key (the Jellyfin id) then drives
+ ;;     the Tunarr Scheduler lookup.
+ ;;   :scheduler — media-id is already the Jellyfin id, which is how Tunarr
+ ;;     Scheduler and the browse endpoints key their catalog. Pseudovision can't
+ ;;     be queried by Jellyfin id, so we load scheduler metadata directly.
+ (fn [{:keys [db]} [_ media-id source]]
    {:db           (-> db
                       (assoc :active-page :media-detail)
                       (assoc :current-media-id media-id))
     :push-history (routes/media-detail-path media-id)
-    ;; Scheduler metadata is loaded from ::load-media-item-success, because
-    ;; Tunarr Scheduler keys its catalog by the item's Jellyfin remote-key,
-    ;; which we only know once the Pseudovision item arrives.
-    :dispatch     [::load-media-item media-id]}))
+    :dispatch     (if (= source :scheduler)
+                    [::load-scheduler-metadata media-id]
+                    [::load-media-item media-id])}))
 
 (rf/reg-event-fx
  ::restore-from-url
@@ -121,7 +133,12 @@
                       (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                         [[::select-api-service :pseudovision]])
                       (when (= page :media-detail)
-                        [[::load-media-item media-id]])
+                        ;; Deep links carry only the id. A numeric id is a
+                        ;; Pseudovision id; anything else is a Jellyfin id that
+                        ;; only the scheduler can resolve.
+                        [(if (numeric-id? media-id)
+                           [::load-media-item media-id]
+                           [::load-scheduler-metadata media-id])])
                       (when (= page :browse)
                         (cond-> [[::load-browse-facet (or facet :tags)]]
                           selection (conj [::load-browse-media (or facet :tags) selection])))
@@ -219,7 +236,8 @@
    (let [item       (:body response)
          remote-key (:remote-key item)
          db         (assoc-in db [:media-items media-id] item)]
-     ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
+     ;; Tunarr Scheduler keys its catalog by the Jellyfin id, so fetch the
+     ;; scheduler metadata using this item's :remote-key.
      (if remote-key
        {:db db :dispatch [::load-scheduler-metadata media-id remote-key]}
        {:db (assoc-in db [:scheduler-metadata media-id] false)}))))
@@ -233,14 +251,19 @@
 (rf/reg-event-fx
  ::load-scheduler-metadata
  (fn [{:keys [db]} [_ media-id remote-key]]
-   ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
-   {:db db
-    :dispatch [::martian/request
-               :get-api-media-item-media-id
-               {::martian/instance-id :tunarr-scheduler
-                :media-id (str media-id)}
-               [::load-scheduler-metadata-success media-id]
-               [::load-scheduler-metadata-failure media-id]]}))
+   ;; Tunarr Scheduler (and its browse endpoints) key the catalog by the item's
+   ;; Jellyfin id. When we arrived via a Pseudovision item we pass its
+   ;; :remote-key as the query id; when we arrived straight from the scheduler
+   ;; or browse, media-id already IS the Jellyfin id. Results are stored under
+   ;; media-id (the UI's current-media-id) either way.
+   (let [query-id (or remote-key media-id)]
+     {:db db
+      :dispatch [::martian/request
+                 :get-api-media-item-media-id
+                 {::martian/instance-id :tunarr-scheduler
+                  :media-id (str query-id)}
+                 [::load-scheduler-metadata-success media-id]
+                 [::load-scheduler-metadata-failure media-id]]})))
 
 (rf/reg-event-db
  ::load-scheduler-metadata-success
