@@ -10,7 +10,8 @@
             [marquee.pages.browse :as browse]
             [marquee.pages.api-docs :as api-docs]
             [marquee.pages.schedule :as schedule]
-            [marquee.pages.jobs :as jobs]))
+            [marquee.pages.jobs :as jobs]
+            [marquee.pages.collections :as collections]))
 
 (def pages
   {:home             {:label "Home"     :view home/page          :show-in-nav true}
@@ -19,9 +20,11 @@
    :browse           {:label "Browse"   :view browse/page        :show-in-nav true}
    :api-docs         {:label "API Docs" :view api-docs/page      :show-in-nav true}
    :schedule-grid    {:label "Guide"    :view schedule/grid-page :show-in-nav true}
+   :collections      {:label "Collections" :view collections/page :show-in-nav true}
    :jobs             {:label "Jobs"     :view jobs/page          :show-in-nav true}
    :channel-schedule {:label "Schedule" :view schedule/channel-page :show-in-nav false}
-   :media-detail     {:label "Media Detail" :view media-detail/page :show-in-nav false}})
+   :media-detail     {:label "Media Detail" :view media-detail/page :show-in-nav false}
+   :collection-detail {:label "Collection" :view collections/page :show-in-nav false}})
 
 (defn navbar []
   (let [active @(rf/subscribe [::subs/active-page])]
@@ -30,7 +33,9 @@
      (for [[page {:keys [label show-in-nav]}] pages
            :when show-in-nav]
        ^{:key page}
-       [button {:variant (if (= page active) :secondary :ghost)
+       [button {:variant (if (or (= page active)
+                              (and (= page :collections) (= active :collection-detail)))
+                          :secondary :ghost)
                 :size :sm
                 :on-click #(rf/dispatch [::events/navigate page])}
         label])]))
