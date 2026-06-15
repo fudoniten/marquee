@@ -4,7 +4,7 @@
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
-            [marquee.components.card :refer [card card-content]]))
+            [marquee.components.card :refer [card card-content card-header card-title]]))
 
 ;;; ── Utilities ───────────────────────────────────────────────────────────────
 
@@ -210,6 +210,34 @@
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
        [remaining-fields merged known-fields]])]])
 
+;;; ── Add to Collection ───────────────────────────────────────────────────
+
+(defn- add-to-collection-dropdown [media-id]
+  (let [open?       @(rf/subscribe [::subs/add-to-collection-open?])
+        collections @(rf/subscribe [::subs/collections])]
+    [:div {:class "relative inline-block"}
+     [button {:size     :sm
+              :variant  :outline
+              :on-click #(rf/dispatch [::events/toggle-add-to-collection])}
+      (if open? "Cancel" "+ Collection")]
+     (when open?
+       [:div {:class "absolute z-10 mt-1 w-56 rounded-md border bg-popover p-1 shadow-md"}
+        (if (empty? collections)
+          [:p {:class "px-2 py-1.5 text-sm text-muted-foreground"} "No collections yet."]
+          (for [coll (sort-by :name collections)
+                :let [already? (some #{(if (number? media-id) media-id (js/parseInt media-id))}
+                                     (:items coll))]]
+            ^{:key (:id coll)}
+            [:button {:class    (str "flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm "
+                                     (if already?
+                                       "text-muted-foreground"
+                                       "hover:bg-accent hover:text-accent-foreground cursor-pointer"))
+                      :disabled (boolean already?)
+                      :on-click #(rf/dispatch [::events/add-to-collection (:id coll) media-id])}
+             (:name coll)
+             (when already?
+               [:span {:class "text-xs"} "✓"])]))])]))
+
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
 (defn page []
@@ -227,11 +255,14 @@
                             :remote-key remote-key :jf-link jf-link
                             :jellyfin-url jellyfin-url :loading? loading?}]
     [:div {:class "space-y-6"}
-     [:div
+     [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost
                :size :sm
                :on-click #(rf/dispatch [::events/navigate :media])}
-       "← Back to Media"]]
+       "← Back to Media"]
+      [:div {:class "flex-1"}]
+      (when (and media-item (not not-found?))
+        [add-to-collection-dropdown media-id])]
 
      (when not-found?
        [:div {:class "rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"}

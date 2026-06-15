@@ -1,5 +1,6 @@
 (ns marquee.events
-  (:require [re-frame.core :as rf]
+  (:require [clojure.string]
+            [re-frame.core :as rf]
             [martian.re-frame :as martian]
             [marquee.routes :as routes]))
 
@@ -58,7 +59,12 @@
     ;; Dry-run defaults to on so nothing is deleted without reviewing first.
     :tag-task-options {:dry-run true :target-limit nil}
     ;; Action states: action-key → {:status :idle|:loading|:success|:error :message "..."}
-    :action-states {}}))
+    :action-states {}
+    ;; Collections (persisted to localStorage)
+    :collections {}              ; id → {:id :name :items [media-id ...] :created-at ms}
+    :current-collection-id nil
+    :new-collection-name ""
+    :add-to-collection-open? false}))
 
 (rf/reg-event-fx
  ::load-app-config
@@ -92,9 +98,12 @@
                       (when (= page :schedule-grid)
                         [[::load-channels]])
                       (when (= page :jobs)
-                        [[::load-jobs]]))]
+                        [[::load-jobs]])
+                      (when (= page :collections)
+                        [[::load-collections]]))]
      (cond-> {:db           (cond-> (assoc db :active-page page)
-                              (= page :browse) (assoc :browse-selection nil))
+                              (= page :browse) (assoc :browse-selection nil)
+                              (= page :collections) (assoc :current-collection-id nil))
               :push-history (routes/page->path page)}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
 
@@ -113,7 +122,7 @@
 (rf/reg-event-fx
  ::restore-from-url
  (fn [{:keys [db]} [_ path]]
-   (let [{:keys [page media-id channel-id facet selection]}
+   (let [{:keys [page media-id channel-id collection-id facet selection]}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
                       (when (= page :media)
@@ -129,13 +138,16 @@
                         [[::load-channels]])
                       (when (= page :channel-schedule)
                         (cond-> (when (nil? (:channels db)) [[::load-channels]])
-                          channel-id (conj [::load-channel-events channel-id]))))]
+                          channel-id (conj [::load-channel-events channel-id])))
+                      (when (#{:collections :collection-detail} page)
+                        [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
-                    (= page :media-detail)     (assoc :current-media-id media-id)
-                    (= page :browse)           (assoc :browse-facet (or facet :tags)
-                                                      :browse-selection selection
-                                                      :browse-media-page 1)
-                    (= page :channel-schedule) (assoc :current-channel-id channel-id))}
+                    (= page :media-detail)      (assoc :current-media-id media-id)
+                    (= page :browse)            (assoc :browse-facet (or facet :tags)
+                                                       :browse-selection selection
+                                                       :browse-media-page 1)
+                    (= page :channel-schedule)  (assoc :current-channel-id channel-id)
+                    (= page :collection-detail) (assoc :current-collection-id collection-id))}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
 
 (rf/reg-event-db
@@ -826,3 +838,99 @@
  ::trigger-tag-triage-failure
  (fn [_ [_ response]]
    (action-error-fx :tag-triage response)))
+
+;; ---------------------------------------------------------------------------
+;; Collections (localStorage-backed)
+;; ---------------------------------------------------------------------------
+
+(def ^:private collections-storage-key "marquee-collections")
+
+(defn- save-collections! [collections]
+  (.setItem js/localStorage collections-storage-key
+            (js/JSON.stringify (clj->js collections))))
+
+(defn- load-collections []
+  (when-let [raw (.getItem js/localStorage collections-storage-key)]
+    (try
+      (let [parsed (js->clj (js/JSON.parse raw) :keywordize-keys true)]
+        (into {} (map (fn [[k v]] [(name k) (assoc v :id (name k))])) parsed))
+      (catch :default _ {}))))
+
+(rf/reg-event-fx
+ ::load-collections
+ (fn [{:keys [db]} _]
+   (let [colls      (or (load-collections) {})
+         db         (assoc db :collections colls)
+         coll-id    (:current-collection-id db)
+         items      (when coll-id (get-in colls [coll-id :items]))
+         dispatches (when (seq items)
+                      (mapv (fn [mid] [::load-media-item mid]) items))]
+     (cond-> {:db db}
+       (seq dispatches) (assoc :dispatch-n dispatches)))))
+
+(rf/reg-event-db
+ ::set-new-collection-name
+ (fn [db [_ name]]
+   (assoc db :new-collection-name name)))
+
+(rf/reg-event-db
+ ::create-collection
+ (fn [db _]
+   (let [name (get db :new-collection-name "")]
+     (if (clojure.string/blank? name)
+       db
+       (let [id    (str (random-uuid))
+             coll  {:id id :name name :items [] :created-at (.getTime (js/Date.))}
+             colls (assoc (:collections db) id coll)]
+         (save-collections! colls)
+         (assoc db :collections colls :new-collection-name ""))))))
+
+(rf/reg-event-fx
+ ::delete-collection
+ (fn [{:keys [db]} [_ collection-id]]
+   (let [colls (dissoc (:collections db) collection-id)]
+     (save-collections! colls)
+     {:db           (assoc db :collections colls :current-collection-id nil)
+      :push-history (routes/page->path :collections)})))
+
+(rf/reg-event-db
+ ::add-to-collection
+ (fn [db [_ collection-id media-id]]
+   (let [media-id (if (number? media-id) media-id (js/parseInt media-id))
+         colls (update-in (:collections db) [collection-id :items]
+                          (fn [items]
+                            (if (some #{media-id} items)
+                              items
+                              (conj (vec items) media-id))))]
+     (save-collections! colls)
+     (assoc db :collections colls :add-to-collection-open? false))))
+
+(rf/reg-event-db
+ ::remove-from-collection
+ (fn [db [_ collection-id media-id]]
+   (let [colls (update-in (:collections db) [collection-id :items]
+                          (fn [items] (vec (remove #{media-id} items))))]
+     (save-collections! colls)
+     (assoc db :collections colls))))
+
+(rf/reg-event-db
+ ::toggle-add-to-collection
+ (fn [db _]
+   (update db :add-to-collection-open? not)))
+
+(rf/reg-event-db
+ ::close-add-to-collection
+ (fn [db _]
+   (assoc db :add-to-collection-open? false)))
+
+(rf/reg-event-fx
+ ::navigate-to-collection
+ (fn [{:keys [db]} [_ collection-id]]
+   (let [coll   (get-in db [:collections collection-id])
+         items  (:items coll)
+         dispatches (mapv (fn [mid] [::load-media-item mid]) items)]
+     {:db           (-> db
+                        (assoc :active-page :collection-detail)
+                        (assoc :current-collection-id collection-id))
+      :push-history (routes/collection-path collection-id)
+      :dispatch-n   dispatches})))

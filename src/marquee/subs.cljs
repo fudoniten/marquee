@@ -225,3 +225,47 @@
  ::tag-task-options
  (fn [db _]
    (:tag-task-options db {:dry-run true :target-limit nil})))
+
+;; ---------------------------------------------------------------------------
+;; Collections subscriptions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-sub
+ ::collections
+ (fn [db _]
+   (vals (:collections db {}))))
+
+(rf/reg-sub
+ ::collections-map
+ (fn [db _]
+   (:collections db {})))
+
+(rf/reg-sub
+ ::collection
+ (fn [db [_ id]]
+   (get-in db [:collections id])))
+
+(rf/reg-sub
+ ::current-collection-id
+ (fn [db _]
+   (:current-collection-id db)))
+
+(rf/reg-sub
+ ::collection-items
+ (fn [db [_ collection-id]]
+   (let [coll      (get-in db [:collections collection-id])
+         media-ids (:items coll)]
+     (when (seq media-ids)
+       (let [items (keep #(get-in db [:media-items %]) media-ids)]
+         (when (= (count items) (count media-ids))
+           items))))))
+
+(rf/reg-sub
+ ::new-collection-name
+ (fn [db _]
+   (:new-collection-name db "")))
+
+(rf/reg-sub
+ ::add-to-collection-open?
+ (fn [db _]
+   (:add-to-collection-open? db false)))

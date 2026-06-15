@@ -1,20 +1,24 @@
 (ns marquee.routes)
 
 (def page->path
-  {:home             "/"
-   :about            "/about"
-   :media            "/media"
-   :browse           "/browse"
-   :api-docs         "/api-docs"
-   :schedule-grid    "/schedule"
-   :channel-schedule "/schedule/channel"
-   :jobs             "/jobs"})
+  {:home              "/"
+   :about             "/about"
+   :media             "/media"
+   :browse            "/browse"
+   :api-docs          "/api-docs"
+   :schedule-grid     "/schedule"
+   :channel-schedule  "/schedule/channel"
+   :jobs              "/jobs"
+   :collections       "/collections"})
 
 (defn media-detail-path [media-id]
   (str "/media/" media-id))
 
 (defn channel-path [channel-id]
   (str "/schedule/channel/" channel-id))
+
+(defn collection-path [collection-id]
+  (str "/collections/" collection-id))
 
 (defn browse-path
   ([facet] (str "/browse/" (name facet)))
@@ -37,5 +41,9 @@
            :selection (when sel (js/decodeURIComponent sel))})
         (when-let [[_ id] (re-matches #"/schedule/channel/(.+)" path)]
           {:page :channel-schedule :channel-id (js/parseInt id)})
+        (when (= path "/collections")
+          {:page :collections})
+        (when-let [[_ id] (re-matches #"/collections/(.+)" path)]
+          {:page :collection-detail :collection-id id})
         (when (= path "/jobs")
           {:page :jobs}))))
