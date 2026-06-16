@@ -43,17 +43,28 @@
 ;; Guide helpers — normalise a PlayoutEvent for display
 ;; ---------------------------------------------------------------------------
 
+(defn- event-title
+  "Best available label for a playout event: an explicit custom title, else the
+  referenced media item's name (resolved from the cache), else a bare id."
+  [{:keys [custom-title media-item-id]} media-items]
+  (let [item (get media-items media-item-id)]
+    (or (not-empty custom-title)
+        (when (map? item) (or (not-empty (:title item)) (not-empty (:name item))))
+        (when media-item-id (str "Item #" media-item-id))
+        "Untitled")))
+
 (defn- event->display
-  "Convert a raw PlayoutEvent (ISO-8601 strings) to a display map with :ms times."
-  [{:keys [start-at finish-at guide-start-at guide-finish-at custom-title
-           media-item-id kind] :as ev}]
-  (let [start-ms  (iso->ms (or guide-start-at start-at))
-        end-ms    (iso->ms (or guide-finish-at finish-at))]
-    (when (and start-ms end-ms)
-      (assoc ev
-             :start-ms start-ms
-             :end-ms   end-ms
-             :title    (or custom-title (str "Item #" media-item-id))))))
+  "Convert a raw PlayoutEvent (ISO-8601 strings) to a display map with :ms times.
+  `media-items` is the cached id→item map used to resolve a human-readable title."
+  ([ev] (event->display ev {}))
+  ([{:keys [start-at finish-at guide-start-at guide-finish-at] :as ev} media-items]
+   (let [start-ms (iso->ms (or guide-start-at start-at))
+         end-ms   (iso->ms (or guide-finish-at finish-at))]
+     (when (and start-ms end-ms)
+       (assoc ev
+              :start-ms start-ms
+              :end-ms   end-ms
+              :title    (event-title ev media-items))))))
 
 (defn- content-event? [{:keys [kind]}]
   (#{nil "content"} kind))
@@ -95,11 +106,11 @@
           :on-click  #(when on-click (on-click))}
      [:span {:class "truncate"} title]]))
 
-(defn- channel-row [channel window-start window-end events on-click-channel]
+(defn- channel-row [channel window-start window-end events media-items on-click-channel]
   (let [total-min   (/ (- window-end window-start) 60000)
         visible     (->> events
                          (filter content-event?)
-                         (keep event->display)
+                         (keep #(event->display % media-items))
                          (filter #(and (< (:start-ms %) window-end)
                                        (> (:end-ms %)  window-start))))]
     [:div {:class "flex border-b"}
@@ -111,12 +122,17 @@
             :style {:height "44px" :min-width (str (* total-min px-per-min) "px")}}
       (for [ev visible]
         ^{:key (str (:start-ms ev) "-" (:title ev))}
+        ;; Clicking a slot opens the media item it plays; fall back to the
+        ;; channel page when there's no item to link to (e.g. filler/offline).
         [grid-slot ev window-start window-end
-         #(rf/dispatch [::events/navigate-to-channel (:id channel)])])]]))
+         (if-let [mid (:media-item-id ev)]
+           #(rf/dispatch [::events/navigate-to-media-detail mid])
+           #(rf/dispatch [::events/navigate-to-channel (:id channel)]))])]]))
 
 (defn grid-page []
   (let [channels     @(rf/subscribe [::subs/channels])
         channel-evs  @(rf/subscribe [::subs/all-channel-events])
+        media-items  @(rf/subscribe [::subs/media-items-map])
         loading?     @(rf/subscribe [::subs/channels-loading?])
         window-start @(rf/subscribe [::subs/schedule-window-start])
         window-end   (+ window-start grid-window-ms)]
@@ -156,7 +172,7 @@
         (for [ch channels
               :let [evs (get channel-evs (:id ch) [])]]
           ^{:key (:id ch)}
-          [channel-row ch window-start window-end evs
+          [channel-row ch window-start window-end evs media-items
            #(rf/dispatch [::events/navigate-to-channel (:id ch)])])])]))
 
 ;; ---------------------------------------------------------------------------
@@ -164,29 +180,35 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- schedule-entry [{:keys [start-ms end-ms title kind media-item-id] :as ev}]
-  (let [now   (now-ms)
-        live? (and (<= start-ms now) (> end-ms now))
-        past? (< end-ms now)]
+  (let [now       (now-ms)
+        live?     (and (<= start-ms now) (> end-ms now))
+        past?     (< end-ms now)
+        linkable? (and media-item-id (content-event? ev))]
     [:div {:class (str "flex gap-4 py-4 border-b last:border-0 "
                        (when past? "opacity-50"))}
      [:div {:class "flex-1 min-w-0"}
       [:div {:class "flex items-baseline gap-2 flex-wrap"}
        (when live?
          [:span {:class "text-xs font-bold text-primary uppercase tracking-wide"} "LIVE"])
-       [:span {:class "text-sm font-medium"} title]
+       (if linkable?
+         [:a {:class    "text-sm font-medium cursor-pointer underline-offset-4 hover:underline hover:text-primary"
+              :on-click #(rf/dispatch [::events/navigate-to-media-detail media-item-id])}
+          title]
+         [:span {:class "text-sm font-medium"} title])
        (when (and kind (not= kind "content"))
          [:span {:class "text-xs text-muted-foreground border rounded px-1"} kind])]
       [:p {:class "text-xs text-muted-foreground mt-0.5"}
        (str (format-date-time start-ms) " · " (duration-str start-ms end-ms))]]]))
 
 (defn channel-page []
-  (let [channel    @(rf/subscribe [::subs/current-channel])
-        raw-events @(rf/subscribe [::subs/current-channel-events])
-        loading?   @(rf/subscribe [::subs/channel-events-loading?])
-        channels   @(rf/subscribe [::subs/channels])
-        entries    (->> (or raw-events [])
-                        (keep event->display)
-                        (sort-by :start-ms))]
+  (let [channel     @(rf/subscribe [::subs/current-channel])
+        raw-events  @(rf/subscribe [::subs/current-channel-events])
+        media-items @(rf/subscribe [::subs/media-items-map])
+        loading?    @(rf/subscribe [::subs/channel-events-loading?])
+        channels    @(rf/subscribe [::subs/channels])
+        entries     (->> (or raw-events [])
+                         (keep #(event->display % media-items))
+                         (sort-by :start-ms))]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-start justify-between gap-4 flex-wrap"}
       [:div

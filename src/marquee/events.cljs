@@ -242,6 +242,39 @@
    (log-request-failure (str "Failed to load media item: " media-id) response)
    (assoc-in db [:media-items media-id] false)))
 
+;; Lightweight loader used to resolve a media item's name for display (e.g. the
+;; schedule/guide). Unlike ::load-media-item it does not fetch scheduler
+;; metadata, and it skips items that are already cached or in flight so loading
+;; a channel's playout doesn't fan out into a request storm.
+(rf/reg-event-fx
+ ::ensure-media-item
+ (fn [{:keys [db]} [_ media-id]]
+   (if (or (contains? (:media-items db) media-id)
+           (contains? (:media-items-loading db) media-id))
+     {:db db}
+     {:db       (update db :media-items-loading (fnil conj #{}) media-id)
+      :dispatch [::martian/request
+                 :get-api-media-items-id
+                 {::martian/instance-id :pseudovision
+                  :id media-id}
+                 [::ensure-media-item-success media-id]
+                 [::ensure-media-item-failure media-id]]})))
+
+(rf/reg-event-db
+ ::ensure-media-item-success
+ (fn [db [_ media-id response]]
+   (-> db
+       (assoc-in [:media-items media-id] (:body response))
+       (update :media-items-loading disj media-id))))
+
+(rf/reg-event-db
+ ::ensure-media-item-failure
+ (fn [db [_ media-id response]]
+   (log-request-failure (str "Failed to load media item: " media-id) response)
+   (-> db
+       (assoc-in [:media-items media-id] false)
+       (update :media-items-loading disj media-id))))
+
 (rf/reg-event-fx
  ::load-scheduler-metadata
  (fn [{:keys [db]} [_ media-id remote-key]]
@@ -533,14 +566,21 @@
                [::load-channel-events-success channel-id]
                [::load-channel-events-failure channel-id]]}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::load-channel-events-success
- (fn [db [_ channel-id response]]
-   (let [body  (:body response)
-         items (if (map? body) (:items body) body)]
-     (-> db
-         (assoc-in [:channel-events channel-id] items)
-         (update :channel-events-loading disj channel-id)))))
+ (fn [{:keys [db]} [_ channel-id response]]
+   (let [body      (:body response)
+         items     (if (map? body) (:items body) body)
+         ;; Resolve names for the content items referenced by this playout so
+         ;; the guide can show titles and link to each media item.
+         media-ids (->> items
+                        (filter #(#{nil "content"} (:kind %)))
+                        (keep :media-item-id)
+                        distinct)]
+     {:db         (-> db
+                      (assoc-in [:channel-events channel-id] items)
+                      (update :channel-events-loading disj channel-id))
+      :dispatch-n (mapv (fn [id] [::ensure-media-item id]) media-ids)})))
 
 (rf/reg-event-db
  ::load-channel-events-failure
