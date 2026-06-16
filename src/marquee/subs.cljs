@@ -49,6 +49,13 @@
  (fn [db [_ media-id]]
    (get-in db [:media-items media-id])))
 
+;; Whole media-item cache, keyed by id. Used where we need to resolve several
+;; ids at once (e.g. labelling playout events in the schedule/guide).
+(rf/reg-sub
+ ::media-items-map
+ (fn [db _]
+   (:media-items db {})))
+
 (rf/reg-sub
  ::scheduler-metadata
  (fn [db [_ media-id]]
