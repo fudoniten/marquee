@@ -181,12 +181,13 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- channel-stream-url
-  "Absolute playback URL for a channel, served by Pseudovision. Built directly
-  against the Pseudovision base URL (not the BFF proxy) so the link works when
-  opened in an external player."
-  [pseudovision-url channel-id]
-  (when (and pseudovision-url channel-id)
-    (str pseudovision-url "/api/channels/" channel-id "/stream")))
+  "Absolute HLS playback URL for a channel, served by Pseudovision at
+  `/stream/{uuid}`. Built directly against the Pseudovision base URL (not the
+  BFF proxy) so the link works when opened in an external HLS player. Keys off
+  the channel's UUID — the numeric id/number is not a valid stream identifier."
+  [pseudovision-url channel-uuid]
+  (when (and pseudovision-url channel-uuid)
+    (str pseudovision-url "/stream/" channel-uuid)))
 
 (defn- channel-playback [stream-url]
   [:div {:class "flex items-center gap-2 flex-wrap"}
@@ -228,7 +229,7 @@
         loading?    @(rf/subscribe [::subs/channel-events-loading?])
         channels    @(rf/subscribe [::subs/channels])
         pv-url      @(rf/subscribe [::subs/pseudovision-url])
-        stream-url  (channel-stream-url pv-url (:id channel))
+        stream-url  (channel-stream-url pv-url (:uuid channel))
         entries     (->> (or raw-events [])
                          (keep #(event->display % media-items))
                          (sort-by :start-ms))]
