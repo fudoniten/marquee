@@ -27,6 +27,11 @@
  (fn [db _]
    (:jellyfin-url db)))
 
+(rf/reg-sub
+ ::pseudovision-url
+ (fn [db _]
+   (:pseudovision-url db)))
+
 ;; Media subscriptions
 
 (rf/reg-sub

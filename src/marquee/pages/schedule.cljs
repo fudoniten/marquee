@@ -7,6 +7,7 @@
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
             [marquee.components.action-button :refer [action-btn]]
+            [marquee.components.copy-button :refer [copy-button]]
             [marquee.components.card :refer [card card-content]]))
 
 ;; ---------------------------------------------------------------------------
@@ -179,6 +180,26 @@
 ;; Channel (single) page
 ;; ---------------------------------------------------------------------------
 
+(defn- channel-stream-url
+  "Absolute playback URL for a channel, served by Pseudovision. Built directly
+  against the Pseudovision base URL (not the BFF proxy) so the link works when
+  opened in an external player."
+  [pseudovision-url channel-id]
+  (when (and pseudovision-url channel-id)
+    (str pseudovision-url "/api/channels/" channel-id "/stream")))
+
+(defn- channel-playback [stream-url]
+  [:div {:class "flex items-center gap-2 flex-wrap"}
+   [:span {:class "text-sm font-medium text-muted-foreground"} "Playback:"]
+   [:a {:href   stream-url
+        :target "_blank"
+        :rel    "noopener noreferrer"
+        :class  "inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"}
+    "Watch ↗"]
+   [:code {:class "text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5 break-all"}
+    stream-url]
+   [copy-button {:text stream-url :label "Copy URL"}]])
+
 (defn- schedule-entry [{:keys [start-ms end-ms title kind media-item-id] :as ev}]
   (let [now       (now-ms)
         live?     (and (<= start-ms now) (> end-ms now))
@@ -206,6 +227,8 @@
         media-items @(rf/subscribe [::subs/media-items-map])
         loading?    @(rf/subscribe [::subs/channel-events-loading?])
         channels    @(rf/subscribe [::subs/channels])
+        pv-url      @(rf/subscribe [::subs/pseudovision-url])
+        stream-url  (channel-stream-url pv-url (:id channel))
         entries     (->> (or raw-events [])
                          (keep #(event->display % media-items))
                          (sort-by :start-ms))]
@@ -230,6 +253,9 @@
           (for [ch channels]
             ^{:key (:id ch)}
             [:option {:value (:id ch)} (:name ch)])])]]
+
+     (when stream-url
+       [channel-playback stream-url])
 
      (cond
        loading?

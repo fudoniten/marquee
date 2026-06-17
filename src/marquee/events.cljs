@@ -77,7 +77,9 @@
 (rf/reg-event-db
  ::load-app-config-success
  (fn [db [_ config]]
-   (assoc db :jellyfin-url (get config "jellyfin-url"))))
+   (-> db
+       (assoc :jellyfin-url     (get config "jellyfin-url"))
+       (assoc :pseudovision-url (get config "pseudovision-url")))))
 
 (rf/reg-event-db
  ::load-app-config-failure

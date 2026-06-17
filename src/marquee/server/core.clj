@@ -129,9 +129,11 @@
         sid  (service-id uri)
         svc  (and sid (get config/services sid))]
     (cond
-      ;; Public config for frontend (Jellyfin URL for direct links).
+      ;; Public config for frontend (service URLs for direct links, e.g.
+      ;; Jellyfin item links and Pseudovision channel playback streams).
       (= uri "/api/config")
-      (resp/response {:jellyfin-url (:url config/jellyfin)})
+      (resp/response {:jellyfin-url     (:url config/jellyfin)
+                      :pseudovision-url (get-in config/services [:pseudovision :url])})
 
       ;; Proxy to Jellyfin (images, metadata). Token is added server-side.
       (str/starts-with? uri "/api/jellyfin")
