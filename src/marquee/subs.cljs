@@ -222,11 +222,29 @@
 
 (rf/reg-sub
  ::jobs
- (fn [db _] (:jobs db)))
+ (fn [db _]
+   (let [by-source (:jobs-by-source db)]
+     (when (seq by-source)
+       (->> by-source
+            (mapcat (fn [[source jobs]] (map #(assoc % :source source) jobs)))
+            (sort-by #(or (:created-at %) "") >)
+            vec)))))
 
 (rf/reg-sub
  ::jobs-loading?
- (fn [db _] (:jobs-loading? db false)))
+ (fn [db _] (boolean (seq (:jobs-loading db)))))
+
+(rf/reg-sub
+ ::channel-playout-job
+ :<- [::jobs]
+ (fn [jobs [_ channel-id]]
+   (some (fn [{:keys [source status metadata] :as job}]
+           (when (and (= :pseudovision source)
+                      (contains? #{:running :pending :queued} (keyword status))
+                      (= (str (or (:channel-id job) (:channel-id metadata)))
+                         (str channel-id)))
+             job))
+         jobs)))
 
 (rf/reg-sub
  ::action-state

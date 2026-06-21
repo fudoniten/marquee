@@ -52,9 +52,11 @@
     :channel-events-loading #{}  ; set of channel-ids currently loading
     :schedule-window-start (.getTime (js/Date.))
     :current-channel-id nil
-    ;; Jobs state
-    :jobs nil
-    :jobs-loading? false
+    ;; Jobs state: jobs are fetched from both Tunarr Scheduler and
+    ;; Pseudovision (which now runs its own jobs, e.g. playout generation),
+    ;; keyed by source so the two loads don't clobber each other.
+    :jobs-by-source {}
+    :jobs-loading #{}
     ;; Options for the catalog-wide tag curation tasks (Jobs page panel).
     ;; Dry-run defaults to on so nothing is deleted without reviewing first.
     :tag-task-options {:dry-run true :target-limit nil}
@@ -623,7 +625,7 @@
                         (assoc :active-page :channel-schedule)
                         (assoc :current-channel-id channel-id))
       :push-history (routes/channel-path channel-id)
-      :dispatch-n   (cond-> []
+      :dispatch-n   (cond-> [[::load-jobs] [::poll-channel-playout-job channel-id]]
                       need-channels? (conj [::load-channels])
                       need-events?   (conj [::load-channel-events channel-id]))})))
 
@@ -634,27 +636,93 @@
 (rf/reg-event-fx
  ::load-jobs
  (fn [{:keys [db]} _]
-   {:db (assoc db :jobs-loading? true)
-    :dispatch [::martian/request
-               :get-api-jobs
-               {::martian/instance-id :tunarr-scheduler}
-               [::load-jobs-success]
-               [::load-jobs-failure]]}))
+   {:db (assoc db :jobs-loading #{:tunarr-scheduler :pseudovision})
+    :dispatch-n [[::martian/request
+                  :get-api-jobs
+                  {::martian/instance-id :tunarr-scheduler}
+                  [::load-jobs-success :tunarr-scheduler]
+                  [::load-jobs-failure :tunarr-scheduler]]
+                 [::martian/request
+                  :get-api-jobs
+                  {::martian/instance-id :pseudovision}
+                  [::load-jobs-success :pseudovision]
+                  [::load-jobs-failure :pseudovision]]]}))
 
 (rf/reg-event-db
  ::load-jobs-success
- (fn [db [_ response]]
+ (fn [db [_ source response]]
    (let [body (:body response)
          jobs (if (map? body) (or (:jobs body) (vals body)) body)]
      (-> db
-         (assoc :jobs (vec (sort-by #(or (:created-at %) "") > (or jobs []))))
-         (assoc :jobs-loading? false)))))
+         (assoc-in [:jobs-by-source source] (vec (or jobs [])))
+         (update :jobs-loading disj source)))))
 
 (rf/reg-event-db
  ::load-jobs-failure
- (fn [db [_ response]]
-   (log-request-failure "Failed to load jobs:" response)
-   (-> db (assoc :jobs []) (assoc :jobs-loading? false))))
+ (fn [db [_ source response]]
+   (log-request-failure (str "Failed to load " (name source) " jobs:") response)
+   (-> db
+       (assoc-in [:jobs-by-source source] [])
+       (update :jobs-loading disj source))))
+
+(defn- job-field
+  "Looks up `field` on a job, checked at the top level first and falling
+  back to :metadata, since async jobs tuck most of their identifying
+  context (library, channel, etc.) in there."
+  [{:keys [metadata] :as job} field]
+  (or (field job) (field metadata)))
+
+(defn- any-job-matches?
+  "True if any currently-known job from `source` is running/pending/queued
+  and has `field` equal to `value` (compared as strings so numeric ids and
+  string names both work)."
+  [db source field value]
+  (boolean
+   (some #(and (= source (:source %))
+               (contains? #{:running :pending :queued} (keyword (:status %)))
+               (= (str (job-field % field)) (str value)))
+         (mapcat (fn [[src jobs]] (map #(assoc % :source src) jobs))
+                 (:jobs-by-source db)))))
+
+(rf/reg-event-fx
+ ::poll-channel-playout-job
+ (fn [{:keys [db]} [_ channel-id grace]]
+   (let [grace (or grace 3)]
+     (when (and (= (:active-page db) :channel-schedule)
+                (= (:current-channel-id db) channel-id)
+                (or (pos? grace) (any-job-matches? db :pseudovision :channel-id channel-id)))
+       ;; Re-fetch the schedule alongside the job status so the grid picks up
+       ;; the newly-generated events as soon as the job finishes, without
+       ;; waiting for a manual reload.
+       {:dispatch-n [[::load-jobs] [::load-channel-events channel-id]]
+        ::timeout   {:ms 3000 :dispatch [::poll-channel-playout-job channel-id (max 0 (dec grace))]}}))))
+
+(defn- library-job-active? [db library-id lib-name]
+  (or (any-job-matches? db :pseudovision :library-id library-id)
+      (and lib-name (any-job-matches? db :tunarr-scheduler :library lib-name))))
+
+(rf/reg-event-fx
+ ::poll-library-job
+ (fn [{:keys [db]} [_ library-id lib-name grace]]
+   (let [grace (or grace 3)]
+     (when (and (= (:active-page db) :media)
+                (= (:selected-library-id db) library-id)
+                (or (pos? grace) (library-job-active? db library-id lib-name)))
+       ;; Re-fetch the library's items alongside the job status so scans,
+       ;; retags, etc. show up without a manual reload.
+       {:dispatch-n [[::load-jobs] [::load-library-items library-id]]
+        ::timeout   {:ms 3000 :dispatch [::poll-library-job library-id lib-name (max 0 (dec grace))]}}))))
+
+(rf/reg-event-fx
+ ::poll-channels-after-sync
+ ;; Channel sync has no natural per-channel scope to track in the jobs
+ ;; list, so this just re-fetches the channel list a few times on a timer
+ ;; rather than trying to detect job completion.
+ (fn [{:keys [db]} [_ grace]]
+   (let [grace (or grace 4)]
+     (when (and (= (:active-page db) :schedule-grid) (pos? grace))
+       {:dispatch [::load-channels]
+        ::timeout {:ms 2000 :dispatch [::poll-channels-after-sync (dec grace)]}}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Action state helpers
@@ -705,8 +773,10 @@
 
 (rf/reg-event-fx
  ::trigger-scan-library-success
- (fn [_ [_ library-id _response]]
-   (action-success-fx [:scan-library library-id] "Scan triggered")))
+ (fn [{:keys [db]} [_ library-id _response]]
+   (let [lib-name (some #(when (= (:id %) library-id) (:name %)) (:media-libraries db))]
+     (update (action-success-fx [:scan-library library-id] "Scan triggered")
+             :dispatch-n (fnil conj []) [::poll-library-job library-id lib-name]))))
 
 (rf/reg-event-fx
  ::trigger-scan-library-failure
@@ -728,7 +798,8 @@
 (rf/reg-event-fx
  ::trigger-rebuild-playout-success
  (fn [_ [_ channel-id _response]]
-   (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")))
+   (update (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")
+           :dispatch-n (fnil conj []) [::poll-channel-playout-job channel-id])))
 
 (rf/reg-event-fx
  ::trigger-rebuild-playout-failure
@@ -772,7 +843,8 @@
 (rf/reg-event-fx
  ::trigger-sync-channels-success
  (fn [_ _]
-   (action-success-fx :sync-channels "Channels synced")))
+   (update (action-success-fx :sync-channels "Channels synced")
+           :dispatch-n (fnil conj []) [::poll-channels-after-sync])))
 
 (rf/reg-event-fx
  ::trigger-sync-channels-failure
@@ -811,8 +883,9 @@
 
 (rf/reg-event-fx
  ::trigger-library-action-success
- (fn [_ [_ action library-name _response]]
-   (action-success-fx [action library-name] (library-action-label action))))
+ (fn [{:keys [db]} [_ action library-name _response]]
+   (update (action-success-fx [action library-name] (library-action-label action))
+           :dispatch-n (fnil conj []) [::poll-library-job (:selected-library-id db) library-name])))
 
 (rf/reg-event-fx
  ::trigger-library-action-failure
