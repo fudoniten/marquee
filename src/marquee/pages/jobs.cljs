@@ -120,8 +120,16 @@
     :media/tag-triage [tag-triage-result result]
     [generic-result result]))
 
+(defn- source-badge [source]
+  (when source
+    [:span {:class "text-xs text-muted-foreground border rounded px-1"}
+     (case source
+       :pseudovision     "Pseudovision"
+       :tunarr-scheduler  "Tunarr Scheduler"
+       (name source))]))
+
 (defn- job-row [{:keys [type status library metadata created-at completed-at
-                        error result progress duration-ms]}]
+                        error result progress duration-ms source]}]
   (let [library (or library (:library metadata))
         dry-run? (or (:dry-run metadata) (:dry-run result))]
     [:div {:class "py-4 border-b last:border-0"}
@@ -129,6 +137,7 @@
       [:div {:class "flex items-center gap-3 flex-wrap"}
        [status-badge status]
        [:span {:class "font-medium text-sm"} (or (some-> type name) (str type))]
+       [source-badge source]
        (when library
          [:span {:class "text-xs text-muted-foreground border rounded px-1"} library])
        (when dry-run?
@@ -192,7 +201,7 @@
      [:div {:class "flex items-center justify-between gap-4"}
       [:div
        [:h1 {:class "text-3xl font-bold tracking-tight"} "Jobs"]
-       [:p {:class "text-muted-foreground"} "Background processes from Tunarr Scheduler."]]
+       [:p {:class "text-muted-foreground"} "Background processes from Tunarr Scheduler and Pseudovision."]]
       [button {:size :sm :variant :outline
                :disabled loading?
                :on-click #(rf/dispatch [::events/load-jobs])}

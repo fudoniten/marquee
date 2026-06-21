@@ -52,9 +52,11 @@
     :channel-events-loading #{}  ; set of channel-ids currently loading
     :schedule-window-start (.getTime (js/Date.))
     :current-channel-id nil
-    ;; Jobs state
-    :jobs nil
-    :jobs-loading? false
+    ;; Jobs state: jobs are fetched from both Tunarr Scheduler and
+    ;; Pseudovision (which now runs its own jobs, e.g. playout generation),
+    ;; keyed by source so the two loads don't clobber each other.
+    :jobs-by-source {}
+    :jobs-loading #{}
     ;; Options for the catalog-wide tag curation tasks (Jobs page panel).
     ;; Dry-run defaults to on so nothing is deleted without reviewing first.
     :tag-task-options {:dry-run true :target-limit nil}
@@ -623,7 +625,7 @@
                         (assoc :active-page :channel-schedule)
                         (assoc :current-channel-id channel-id))
       :push-history (routes/channel-path channel-id)
-      :dispatch-n   (cond-> []
+      :dispatch-n   (cond-> [[::load-jobs] [::poll-channel-playout-job channel-id]]
                       need-channels? (conj [::load-channels])
                       need-events?   (conj [::load-channel-events channel-id]))})))
 
@@ -634,27 +636,64 @@
 (rf/reg-event-fx
  ::load-jobs
  (fn [{:keys [db]} _]
-   {:db (assoc db :jobs-loading? true)
-    :dispatch [::martian/request
-               :get-api-jobs
-               {::martian/instance-id :tunarr-scheduler}
-               [::load-jobs-success]
-               [::load-jobs-failure]]}))
+   {:db (assoc db :jobs-loading #{:tunarr-scheduler :pseudovision})
+    :dispatch-n [[::martian/request
+                  :get-api-jobs
+                  {::martian/instance-id :tunarr-scheduler}
+                  [::load-jobs-success :tunarr-scheduler]
+                  [::load-jobs-failure :tunarr-scheduler]]
+                 [::martian/request
+                  :get-api-jobs
+                  {::martian/instance-id :pseudovision}
+                  [::load-jobs-success :pseudovision]
+                  [::load-jobs-failure :pseudovision]]]}))
 
 (rf/reg-event-db
  ::load-jobs-success
- (fn [db [_ response]]
+ (fn [db [_ source response]]
    (let [body (:body response)
          jobs (if (map? body) (or (:jobs body) (vals body)) body)]
      (-> db
-         (assoc :jobs (vec (sort-by #(or (:created-at %) "") > (or jobs []))))
-         (assoc :jobs-loading? false)))))
+         (assoc-in [:jobs-by-source source] (vec (or jobs [])))
+         (update :jobs-loading disj source)))))
 
 (rf/reg-event-db
  ::load-jobs-failure
- (fn [db [_ response]]
-   (log-request-failure "Failed to load jobs:" response)
-   (-> db (assoc :jobs []) (assoc :jobs-loading? false))))
+ (fn [db [_ source response]]
+   (log-request-failure (str "Failed to load " (name source) " jobs:") response)
+   (-> db
+       (assoc-in [:jobs-by-source source] [])
+       (update :jobs-loading disj source))))
+
+(defn- job-channel-id
+  "The channel a job belongs to, for jobs that operate on a single channel
+  (e.g. Pseudovision playout generation). Checked at the top level first,
+  falling back to :metadata since that's where Tunarr-Scheduler-style jobs
+  tuck extra context."
+  [{:keys [metadata] :as job}]
+  (or (:channel-id job) (:channel-id metadata)))
+
+(defn- channel-playout-job-active?
+  "True if Pseudovision currently has a running/queued playout-generation
+  job for the given channel."
+  [db channel-id]
+  (let [jobs (mapcat (fn [[source jobs]] (map #(assoc % :source source) jobs))
+                     (:jobs-by-source db))]
+    (boolean
+     (some #(and (= :pseudovision (:source %))
+                 (contains? #{:running :pending :queued} (keyword (:status %)))
+                 (= (str (job-channel-id %)) (str channel-id)))
+           jobs))))
+
+(rf/reg-event-fx
+ ::poll-channel-playout-job
+ (fn [{:keys [db]} [_ channel-id grace]]
+   (let [grace (or grace 3)]
+     (when (and (= (:active-page db) :channel-schedule)
+                (= (:current-channel-id db) channel-id)
+                (or (pos? grace) (channel-playout-job-active? db channel-id)))
+       {:dispatch [::load-jobs]
+        ::timeout {:ms 3000 :dispatch [::poll-channel-playout-job channel-id (max 0 (dec grace))]}}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Action state helpers
@@ -728,7 +767,8 @@
 (rf/reg-event-fx
  ::trigger-rebuild-playout-success
  (fn [_ [_ channel-id _response]]
-   (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")))
+   (update (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")
+           :dispatch-n (fnil conj []) [::poll-channel-playout-job channel-id])))
 
 (rf/reg-event-fx
  ::trigger-rebuild-playout-failure

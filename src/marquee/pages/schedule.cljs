@@ -201,6 +201,19 @@
     stream-url]
    [copy-button {:text stream-url :label "Copy URL"}]])
 
+(defn- playout-generating-banner
+  "Shown on the channel page while Pseudovision has an active playout
+  generation job for this channel, so a rebuild started elsewhere (or one
+  that simply takes a while) is visible without re-triggering it."
+  [job]
+  [:div {:class "flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-800"}
+   [:span {:class "h-3 w-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"}]
+   [:span "Generating playout…"]
+   (let [{:keys [phase total completed failed skipped]} (:progress job)
+         done (+ (or completed 0) (or failed 0) (or skipped 0))]
+     (when (and total (pos? total))
+       [:span {:class "text-blue-600"} (str done " / " total (when phase (str " · " phase)))]))])
+
 (defn- schedule-entry [{:keys [start-ms end-ms title kind media-item-id] :as ev}]
   (let [now       (now-ms)
         live?     (and (<= start-ms now) (> end-ms now))
@@ -229,6 +242,7 @@
         loading?    @(rf/subscribe [::subs/channel-events-loading?])
         channels    @(rf/subscribe [::subs/channels])
         pv-url      @(rf/subscribe [::subs/pseudovision-url])
+        playout-job @(rf/subscribe [::subs/channel-playout-job (:id channel)])
         stream-url  (channel-stream-url pv-url (:uuid channel))
         entries     (->> (or raw-events [])
                          (keep #(event->display % media-items))
@@ -243,7 +257,8 @@
       [:div {:class "flex items-center gap-2 flex-wrap"}
        (when (:id channel)
          [action-btn {:action-key [:rebuild-playout (:id channel)]
-                      :label      "Rebuild Playout"
+                      :label      (if playout-job "Generating…" "Rebuild Playout")
+                      :disabled   (boolean playout-job)
                       :on-click   #(rf/dispatch [::events/trigger-rebuild-playout (:id channel)])}])
        (when (seq channels)
          [:select {:class     "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
@@ -257,6 +272,9 @@
 
      (when stream-url
        [channel-playback stream-url])
+
+     (when playout-job
+       [playout-generating-banner playout-job])
 
      (cond
        loading?
