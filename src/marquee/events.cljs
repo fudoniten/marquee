@@ -692,8 +692,11 @@
      (when (and (= (:active-page db) :channel-schedule)
                 (= (:current-channel-id db) channel-id)
                 (or (pos? grace) (channel-playout-job-active? db channel-id)))
-       {:dispatch [::load-jobs]
-        ::timeout {:ms 3000 :dispatch [::poll-channel-playout-job channel-id (max 0 (dec grace))]}}))))
+       ;; Re-fetch the schedule alongside the job status so the grid picks up
+       ;; the newly-generated events as soon as the job finishes, without
+       ;; waiting for a manual reload.
+       {:dispatch-n [[::load-jobs] [::load-channel-events channel-id]]
+        ::timeout   {:ms 3000 :dispatch [::poll-channel-playout-job channel-id (max 0 (dec grace))]}}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Action state helpers
