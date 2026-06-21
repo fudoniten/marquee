@@ -106,7 +106,7 @@
 (defn- proxy-to-jellyfin [req]
   (let [{:keys [url token]} config/jellyfin
         path     (subs (:uri req) (count "/api/jellyfin"))
-        target   (str url path)
+        target   (str url (if (str/blank? path) "/" path))
         headers  (cond-> (dissoc (:headers req) "host" "content-length")
                    token (assoc "x-emby-token" token))
         response (client/request {:method          (:request-method req)
