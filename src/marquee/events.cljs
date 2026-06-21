@@ -665,25 +665,24 @@
        (assoc-in [:jobs-by-source source] [])
        (update :jobs-loading disj source))))
 
-(defn- job-channel-id
-  "The channel a job belongs to, for jobs that operate on a single channel
-  (e.g. Pseudovision playout generation). Checked at the top level first,
-  falling back to :metadata since that's where Tunarr-Scheduler-style jobs
-  tuck extra context."
-  [{:keys [metadata] :as job}]
-  (or (:channel-id job) (:channel-id metadata)))
+(defn- job-field
+  "Looks up `field` on a job, checked at the top level first and falling
+  back to :metadata, since async jobs tuck most of their identifying
+  context (library, channel, etc.) in there."
+  [{:keys [metadata] :as job} field]
+  (or (field job) (field metadata)))
 
-(defn- channel-playout-job-active?
-  "True if Pseudovision currently has a running/queued playout-generation
-  job for the given channel."
-  [db channel-id]
-  (let [jobs (mapcat (fn [[source jobs]] (map #(assoc % :source source) jobs))
-                     (:jobs-by-source db))]
-    (boolean
-     (some #(and (= :pseudovision (:source %))
-                 (contains? #{:running :pending :queued} (keyword (:status %)))
-                 (= (str (job-channel-id %)) (str channel-id)))
-           jobs))))
+(defn- any-job-matches?
+  "True if any currently-known job from `source` is running/pending/queued
+  and has `field` equal to `value` (compared as strings so numeric ids and
+  string names both work)."
+  [db source field value]
+  (boolean
+   (some #(and (= source (:source %))
+               (contains? #{:running :pending :queued} (keyword (:status %)))
+               (= (str (job-field % field)) (str value)))
+         (mapcat (fn [[src jobs]] (map #(assoc % :source src) jobs))
+                 (:jobs-by-source db)))))
 
 (rf/reg-event-fx
  ::poll-channel-playout-job
@@ -691,12 +690,39 @@
    (let [grace (or grace 3)]
      (when (and (= (:active-page db) :channel-schedule)
                 (= (:current-channel-id db) channel-id)
-                (or (pos? grace) (channel-playout-job-active? db channel-id)))
+                (or (pos? grace) (any-job-matches? db :pseudovision :channel-id channel-id)))
        ;; Re-fetch the schedule alongside the job status so the grid picks up
        ;; the newly-generated events as soon as the job finishes, without
        ;; waiting for a manual reload.
        {:dispatch-n [[::load-jobs] [::load-channel-events channel-id]]
         ::timeout   {:ms 3000 :dispatch [::poll-channel-playout-job channel-id (max 0 (dec grace))]}}))))
+
+(defn- library-job-active? [db library-id lib-name]
+  (or (any-job-matches? db :pseudovision :library-id library-id)
+      (and lib-name (any-job-matches? db :tunarr-scheduler :library lib-name))))
+
+(rf/reg-event-fx
+ ::poll-library-job
+ (fn [{:keys [db]} [_ library-id lib-name grace]]
+   (let [grace (or grace 3)]
+     (when (and (= (:active-page db) :media)
+                (= (:selected-library-id db) library-id)
+                (or (pos? grace) (library-job-active? db library-id lib-name)))
+       ;; Re-fetch the library's items alongside the job status so scans,
+       ;; retags, etc. show up without a manual reload.
+       {:dispatch-n [[::load-jobs] [::load-library-items library-id]]
+        ::timeout   {:ms 3000 :dispatch [::poll-library-job library-id lib-name (max 0 (dec grace))]}}))))
+
+(rf/reg-event-fx
+ ::poll-channels-after-sync
+ ;; Channel sync has no natural per-channel scope to track in the jobs
+ ;; list, so this just re-fetches the channel list a few times on a timer
+ ;; rather than trying to detect job completion.
+ (fn [{:keys [db]} [_ grace]]
+   (let [grace (or grace 4)]
+     (when (and (= (:active-page db) :schedule-grid) (pos? grace))
+       {:dispatch [::load-channels]
+        ::timeout {:ms 2000 :dispatch [::poll-channels-after-sync (dec grace)]}}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Action state helpers
@@ -747,8 +773,10 @@
 
 (rf/reg-event-fx
  ::trigger-scan-library-success
- (fn [_ [_ library-id _response]]
-   (action-success-fx [:scan-library library-id] "Scan triggered")))
+ (fn [{:keys [db]} [_ library-id _response]]
+   (let [lib-name (some #(when (= (:id %) library-id) (:name %)) (:media-libraries db))]
+     (update (action-success-fx [:scan-library library-id] "Scan triggered")
+             :dispatch-n (fnil conj []) [::poll-library-job library-id lib-name]))))
 
 (rf/reg-event-fx
  ::trigger-scan-library-failure
@@ -815,7 +843,8 @@
 (rf/reg-event-fx
  ::trigger-sync-channels-success
  (fn [_ _]
-   (action-success-fx :sync-channels "Channels synced")))
+   (update (action-success-fx :sync-channels "Channels synced")
+           :dispatch-n (fnil conj []) [::poll-channels-after-sync])))
 
 (rf/reg-event-fx
  ::trigger-sync-channels-failure
@@ -854,8 +883,9 @@
 
 (rf/reg-event-fx
  ::trigger-library-action-success
- (fn [_ [_ action library-name _response]]
-   (action-success-fx [action library-name] (library-action-label action))))
+ (fn [{:keys [db]} [_ action library-name _response]]
+   (update (action-success-fx [action library-name] (library-action-label action))
+           :dispatch-n (fnil conj []) [::poll-library-job (:selected-library-id db) library-name])))
 
 (rf/reg-event-fx
  ::trigger-library-action-failure
