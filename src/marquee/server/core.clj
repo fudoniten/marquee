@@ -4,7 +4,8 @@
             [ring.util.response :as resp]
             [clj-http.client :as client]
             [marquee.server.config :as config]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import [java.io StringWriter PrintWriter]))
 
 ;; Holds fetched+rewritten specs keyed by service-id, populated at startup.
 (defonce spec-cache (atom {}))
@@ -91,6 +92,14 @@
                       {:errors (into {} (for [[id e] errors] [id (.getMessage ^Throwable e)]))})))
     (reset! spec-cache (into {} results))))
 
+(defn- log-proxy-error [service-id method target status body-str]
+  (binding [*out* *err*]
+    (println (str "[" (name service-id) "] "
+                  (str/upper-case (name method))
+                  " " target " → " status))
+    (when (seq body-str)
+      (println body-str))))
+
 (defn- proxy-to-backend [service-id {:keys [url token]} req]
   (let [prefix   (str "/api/" (name service-id))
         path     (subs (:uri req) (count prefix))
@@ -103,10 +112,17 @@
                                   :headers         headers
                                   :body            (:body req)
                                   :as              :stream
-                                  :throw-exceptions false})]
-    {:status  (:status response)
-     :headers (dissoc (:headers response) "transfer-encoding" "content-length")
-     :body    (:body response)}))
+                                  :throw-exceptions false})
+        status   (:status response)]
+    (if (and status (>= status 400))
+      (let [body-str (when-let [s (:body response)] (slurp s))]
+        (log-proxy-error service-id (:request-method req) target status body-str)
+        {:status  status
+         :headers (dissoc (:headers response) "transfer-encoding" "content-length")
+         :body    body-str})
+      {:status  status
+       :headers (dissoc (:headers response) "transfer-encoding" "content-length")
+       :body    (:body response)})))
 
 (defn- proxy-to-jellyfin [req]
   (let [{:keys [url token]} config/jellyfin
@@ -120,10 +136,17 @@
                                   :headers         headers
                                   :body            (:body req)
                                   :as              :stream
-                                  :throw-exceptions false})]
-    {:status  (:status response)
-     :headers (dissoc (:headers response) "transfer-encoding" "content-length")
-     :body    (:body response)}))
+                                  :throw-exceptions false})
+        status   (:status response)]
+    (if (and status (>= status 400))
+      (let [body-str (when-let [s (:body response)] (slurp s))]
+        (log-proxy-error :jellyfin (:request-method req) target status body-str)
+        {:status  status
+         :headers (dissoc (:headers response) "transfer-encoding" "content-length")
+         :body    body-str})
+      {:status  status
+       :headers (dissoc (:headers response) "transfer-encoding" "content-length")
+       :body    (:body response)})))
 
 (defn- service-id [uri]
   (when-let [[_ id] (re-find #"^/api/([^/]+)" uri)]
@@ -163,7 +186,28 @@
       :else
       (proxy-to-backend sid svc req))))
 
-(def app (wrap-json-response handler))
+(defn- throwable->trace-str [^Throwable t]
+  (let [sw (StringWriter.)
+        pw (PrintWriter. sw)]
+    (.printStackTrace t pw)
+    (str sw)))
+
+(defn- wrap-exception-logging [handler]
+  (fn [req]
+    (try
+      (handler req)
+      (catch Throwable t
+        (let [trace (throwable->trace-str t)]
+          (binding [*out* *err*]
+            (println (str "Unhandled exception: "
+                          (str/upper-case (name (:request-method req)))
+                          " " (:uri req)))
+            (println trace))
+          {:status 500
+           :body   {:error (.getMessage t)
+                    :trace trace}})))))
+
+(def app (-> handler wrap-exception-logging wrap-json-response))
 
 (defn -main [& _]
   (try
