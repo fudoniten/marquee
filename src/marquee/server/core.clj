@@ -11,15 +11,20 @@
 
 (defn- add-operation-ids
   "Add operationId to endpoints that are missing it, using the pattern:
-   {method}-{path-with-dashes}, e.g. 'get-api-media-items-id'"
+   {method}-{path-with-dashes}, e.g. 'get-api-media-items-id'
+   
+   Handles path parameters correctly by removing braces and normalizing dashes,
+   and uses lowercase method names to match martian's kebab-case keyword conversion."
   [paths]
   (reduce-kv
    (fn [acc path methods]
      (let [;; Convert path to a safe operation name part (remove leading slash, replace special chars)
            path-part (-> path
-                        (str/replace #"^/" "")
-                        (str/replace #"[{}/_]" "-")
-                        (str/replace #"-+$" ""))
+                        (str/replace #"^/" "")                    ;; Remove leading slash
+                        (str/replace #"[{}]" "")                  ;; Remove braces (don't replace with dash)
+                        (str/replace #"[/_]" "-")                 ;; Replace other special chars
+                        (str/replace #"-+" "-")                   ;; Normalize consecutive dashes
+                        (str/replace #"-+$" ""))                  ;; Remove trailing dashes
            ;; Add operationId to each method if missing
            updated-methods (reduce-kv
                            (fn [m-acc method details]
@@ -27,7 +32,7 @@
                                     (if (get details "operationId")
                                       details
                                       (assoc details "operationId"
-                                             (str (name method) "-" path-part)))))
+                                             (str (-> method name .toLowerCase) "-" path-part)))))
                            {}
                            methods)]
        (assoc acc path updated-methods)))
