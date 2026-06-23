@@ -751,7 +751,10 @@
 (defn- action-error-fx [action-key response]
   (let [err (or (get-in response [:body :message])
                 (get-in response [:body :error])
-                (str "Error " (:status response)))]
+                (str "Error " (:status response)))
+        trace (get-in response [:body :trace])]
+    (when trace
+      (js/console.error "Server trace for" (pr-str action-key) "\n" trace))
     {:dispatch   [::set-action-state action-key :error err]
      ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
 

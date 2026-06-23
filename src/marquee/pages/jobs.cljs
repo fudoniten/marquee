@@ -40,9 +40,9 @@
   "Rich progress for item-based jobs: bar, done/failed/skipped counts,
    current item, and phase."
   [{:keys [phase total completed failed skipped current-item]} running?]
-  (let [done (+ (or completed 0) (or failed 0) (or skipped 0))
-        pct  (when (and total (pos? total))
-               (min 100 (js/Math.round (* 100 (/ done total)))))]
+  (let [processed (+ (or completed 0) (or failed 0) (or skipped 0))
+        pct       (when (and total (pos? total))
+                    (min 100 (js/Math.round (* 100 (/ processed total)))))]
     [:div {:class "mt-2 space-y-1"}
      (when pct
        [:div {:class "h-1.5 w-full max-w-md rounded bg-muted overflow-hidden"}
@@ -52,7 +52,7 @@
       (when phase
         [:span {:class "font-medium"} phase])
       (when total
-        [:span (str done " / " total " done" (when pct (str " (" pct "%)")))])
+        [:span (str (or completed 0) " / " total " done" (when pct (str " (" pct "%)")))])
       (when (and failed (pos? failed))
         [:span {:class "text-red-600"} (str failed " failed")])
       (when (and skipped (pos? skipped))
