@@ -233,12 +233,15 @@
  ::load-media-item-success
  (fn [{:keys [db]} [_ media-id response]]
    (let [item       (:body response)
+         numeric-id (:id item)
          remote-key (:remote-key item)
          db         (assoc-in db [:media-items media-id] item)]
      ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
      (if remote-key
-       {:db db :dispatch [::load-scheduler-metadata media-id remote-key]}
-       {:db (assoc-in db [:scheduler-metadata media-id] false)}))))
+       {:db db :dispatch-n [[::load-scheduler-metadata media-id remote-key]
+                             [::load-media-tags numeric-id]]}
+       {:db (assoc-in db [:scheduler-metadata media-id] false)
+        :dispatch [::load-media-tags numeric-id]}))))
 
 (rf/reg-event-db
  ::load-media-item-failure
@@ -781,8 +784,85 @@
         trace (get-in response [:body :trace])]
     (when trace
       (js/console.error "Server trace for" (pr-str action-key) "\n" trace))
-    {:dispatch   [::set-action-state action-key :error err]
-     ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+     {:dispatch   [::set-action-state action-key :error err]
+      ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+
+;; ---------------------------------------------------------------------------
+;; Media tag management
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::load-media-tags
+ (fn [{:keys [db]} [_ numeric-id]]
+   {:db db
+    :dispatch [::martian/request
+               :get-api-media-items-id-tags
+               {::martian/instance-id :pseudovision
+                :id numeric-id}
+               [::load-media-tags-success numeric-id]
+               [::load-media-tags-failure numeric-id]]}))
+
+(rf/reg-event-db
+ ::load-media-tags-success
+ (fn [db [_ numeric-id response]]
+   (assoc-in db [:media-tags numeric-id] (vec (:body response)))))
+
+(rf/reg-event-db
+ ::load-media-tags-failure
+ (fn [db [_ numeric-id response]]
+   (log-request-failure (str "Failed to load tags for media: " numeric-id) response)
+   (assoc-in db [:media-tags numeric-id] [])))
+
+(rf/reg-event-fx
+ ::add-media-tag
+ (fn [{:keys [db]} [_ numeric-id tag]]
+   (let [k [:add-tag numeric-id tag]]
+     {:db (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-items-id-tags
+                 {::martian/instance-id :pseudovision
+                  :id numeric-id
+                  :tags [tag]
+                  :source "manual"}
+                 [::add-media-tag-success numeric-id tag]
+                 [::add-media-tag-failure numeric-id tag]]})))
+
+(rf/reg-event-fx
+ ::add-media-tag-success
+ (fn [{:keys [db]} [_ numeric-id tag _response]]
+   (let [k [:add-tag numeric-id tag]]
+     (update (action-success-fx k (str "Added tag: " tag))
+             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
+
+(rf/reg-event-fx
+ ::add-media-tag-failure
+ (fn [_ [_ numeric-id tag response]]
+   (action-error-fx [:add-tag numeric-id tag] response)))
+
+(rf/reg-event-fx
+ ::remove-media-tag
+ (fn [{:keys [db]} [_ numeric-id tag]]
+   (let [k [:remove-tag numeric-id tag]]
+     {:db (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :delete-api-media-items-id-tags-tag
+                 {::martian/instance-id :pseudovision
+                  :id numeric-id
+                  :tag tag}
+                 [::remove-media-tag-success numeric-id tag]
+                 [::remove-media-tag-failure numeric-id tag]]})))
+
+(rf/reg-event-fx
+ ::remove-media-tag-success
+ (fn [{:keys [db]} [_ numeric-id tag _response]]
+   (let [k [:remove-tag numeric-id tag]]
+     (update (action-success-fx k (str "Removed tag: " tag))
+             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
+
+(rf/reg-event-fx
+ ::remove-media-tag-failure
+ (fn [_ [_ numeric-id tag response]]
+   (action-error-fx [:remove-tag numeric-id tag] response)))
 
 ;; ---------------------------------------------------------------------------
 ;; Pseudovision triggers

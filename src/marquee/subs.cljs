@@ -66,6 +66,11 @@
  (fn [db [_ media-id]]
    (get-in db [:scheduler-metadata media-id])))
 
+(rf/reg-sub
+ ::media-tags
+ (fn [db [_ numeric-id]]
+   (get-in db [:media-tags numeric-id] [])))
+
 ;; Library selection and pagination subscriptions
 
 (rf/reg-sub

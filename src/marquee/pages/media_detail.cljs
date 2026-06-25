@@ -1,6 +1,7 @@
 (ns marquee.pages.media-detail
   (:require [clojure.string :as str]
             [re-frame.core :as rf]
+            [reagent.core :as r]
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
@@ -198,9 +199,11 @@
     "state" "id" "remote-key" "plot" "description" "tags" "genres"
     "channels" "taglines" "parent-id" "categories"})
 
+(declare tag-editor)
+
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key jellyfin-url loading? categories]}]
+  [{:keys [merged remote-key jellyfin-url loading? numeric-id]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -219,8 +222,14 @@
         [field-row "Pseudovision ID" (:id merged)]
         [field-row "Jellyfin ID"    remote-key]
         [parent-field-row (:parent-id merged) jellyfin-url]]
-       [chip-list "Tags"     (or (field-by-name merged "tags")     (:tags merged))
-        #(rf/dispatch [::events/browse-select-item :tags %])]
+        [:div {:class "py-2"}
+         [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Tags"]
+         [tag-editor numeric-id
+          (or (field-by-name merged "tags") (:tags merged))]]
+       [chip-list "Genres"   (or (field-by-name merged "genres")   (:genres merged))
+        #(rf/dispatch [::events/browse-select-item :genres %])]
+       [chip-list "Channels" (or (field-by-name merged "channels") (:channels merged))
+        #(rf/dispatch [::events/browse-select-item :channels %])]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
        [dimension-chips categories]
        [remaining-fields merged known-fields]])]])
@@ -251,7 +260,54 @@
                       :on-click #(rf/dispatch [::events/add-to-collection (:id coll) media-id])}
              (:name coll)
              (when already?
-               [:span {:class "text-xs"} "✓"])]))])]))
+                [:span {:class "text-xs"} "✓"])]))])]))
+
+;;; ── Tag Editor ──────────────────────────────────────────────────────────────
+
+(defn- tag-editor [numeric-id scheduler-tags]
+  (let [new-tag (r/atom "")]
+    (fn [numeric-id scheduler-tags]
+      (let [pv-tags   (mapv str @(rf/subscribe [::subs/media-tags numeric-id]))
+            sched-tags (mapv str (or scheduler-tags []))
+            pv-set    (set pv-tags)
+            all-tags  (vec (distinct (concat pv-tags sched-tags)))]
+        [:div {:class "space-y-2"}
+         (when (seq all-tags)
+           [:div {:class "flex flex-wrap gap-1.5"}
+            (for [tag all-tags]
+              (let [in-pv? (contains? pv-set tag)]
+                ^{:key tag}
+                [:span {:class (str "inline-flex items-center gap-1 rounded-full pl-2.5 pr-1 py-0.5 text-xs font-medium "
+                                    (if in-pv?
+                                      "bg-secondary text-secondary-foreground"
+                                      "bg-muted text-muted-foreground"))}
+                 [:button {:class "hover:text-primary"
+                           :on-click #(rf/dispatch [::events/browse-select-item :tags tag])}
+                  tag]
+                 (when in-pv?
+                   [:button {:class "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-secondary-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
+                             :on-click #(rf/dispatch [::events/remove-media-tag numeric-id tag])}
+                    "×"])]))])
+         [:div {:class "flex gap-2"}
+          [:input {:type "text"
+                   :class "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                   :placeholder "Add tag..."
+                   :value @new-tag
+                   :on-change #(reset! new-tag (.. % -target -value))
+                   :on-key-down #(when (= "Enter" (.-key %))
+                                    (.preventDefault %)
+                                    (let [tag (str/trim @new-tag)]
+                                      (when (seq tag)
+                                        (rf/dispatch [::events/add-media-tag numeric-id tag])
+                                        (reset! new-tag ""))))}]
+          [button {:size :sm
+                   :variant :outline
+                   :disabled (str/blank? @new-tag)
+                   :on-click #(let [tag (str/trim @new-tag)]
+                                (when (seq tag)
+                                  (rf/dispatch [::events/add-media-tag numeric-id tag])
+                                  (reset! new-tag "")))}
+           "Add"]]]))))
 
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
@@ -267,10 +323,11 @@
         jf-link            (jellyfin-item-url jellyfin-url remote-key)
         merged             (when (map? media-item)
                              (merge-metadata media-item scheduler-metadata))
+        numeric-id         (when (map? media-item) (:id media-item))
         ctx                {:media-id media-id :media-item media-item :merged merged
                             :remote-key remote-key :jf-link jf-link
                             :jellyfin-url jellyfin-url :loading? loading?
-                            :categories categories}]
+                            :numeric-id numeric-id}]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost
