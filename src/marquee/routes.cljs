@@ -30,15 +30,17 @@
     "/"          {:page :home}
     "/about"     {:page :about}
     "/media"     {:page :media}
-    "/browse"    {:page :browse :facet :tags}
+     "/browse"    {:page :browse :facet :tags}
+     "/browse/tags"       {:page :browse :facet :tags}
+     "/browse/dimensions" {:page :browse :facet :dimensions}
     "/api-docs"  {:page :api-docs}
     "/schedule"  {:page :schedule-grid}
-    (or (when-let [[_ id] (re-matches #"/media/(.+)" path)]
-          {:page :media-detail :media-id id})
-        (when-let [[_ facet sel] (re-matches #"/browse/(tags|genres|channels)(?:/(.+))?" path)]
-          {:page      :browse
-           :facet     (keyword facet)
-           :selection (when sel (js/decodeURIComponent sel))})
+     (or (when-let [[_ id] (re-matches #"/media/(.+)" path)]
+           {:page :media-detail :media-id id})
+         (when-let [[_ facet sel] (re-matches #"/browse/(tags|genres|channels|dimensions)(?:/(.+))?" path)]
+           {:page      :browse
+            :facet     (keyword facet)
+            :selection (when sel (js/decodeURIComponent sel))})
         (when-let [[_ id] (re-matches #"/schedule/channel/(.+)" path)]
           {:page :channel-schedule :channel-id (js/parseInt id)})
         (when (= path "/collections")

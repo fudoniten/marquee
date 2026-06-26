@@ -40,7 +40,7 @@
 
 (defn chips
   "Render values as chips. With `on-click`, chips become buttons and the
-  handler is called with the chip's display string."
+   handler is called with the chip's display string."
   ([values] [chips values nil])
   ([values on-click]
    [:div {:class "flex flex-wrap gap-1.5"}
@@ -175,14 +175,32 @@
          (str parent-id)]
         [:span (str parent-id)])]]))
 
+(defn- dimension-chips
+  "Render dimension categories as clickable chips."
+  [categories]
+  (when (and (map? categories) (seq categories))
+    [:div {:class "py-2"}
+     [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Dimensions"]
+     [:div {:class "space-y-2"}
+      (for [[dim values] categories]
+        ^{:key dim}
+        [:div {:class "flex flex-wrap items-center gap-1.5"}
+         [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
+          (str (humanize dim) ":")]
+         (for [v values]
+           ^{:key v}
+           [:button {:class "inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                     :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
+            (str v)])])]]))
+
 (def ^:private known-fields
   #{"name" "kind" "type" "year" "release-date" "content-rating" "premiere"
     "state" "id" "remote-key" "plot" "description" "tags" "genres"
-    "channels" "taglines" "parent-id"})
+    "channels" "taglines" "parent-id" "categories"})
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key jellyfin-url loading?]}]
+  [{:keys [merged remote-key jellyfin-url loading? categories]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -203,11 +221,8 @@
         [parent-field-row (:parent-id merged) jellyfin-url]]
        [chip-list "Tags"     (or (field-by-name merged "tags")     (:tags merged))
         #(rf/dispatch [::events/browse-select-item :tags %])]
-       [chip-list "Genres"   (or (field-by-name merged "genres")   (:genres merged))
-        #(rf/dispatch [::events/browse-select-item :genres %])]
-       [chip-list "Channels" (or (field-by-name merged "channels") (:channels merged))
-        #(rf/dispatch [::events/browse-select-item :channels %])]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
+       [dimension-chips categories]
        [remaining-fields merged known-fields]])]])
 
 ;;; ── Add to Collection ───────────────────────────────────────────────────
@@ -244,6 +259,7 @@
   (let [media-id           @(rf/subscribe [::subs/current-media-id])
         media-item         @(rf/subscribe [::subs/media-item media-id])
         scheduler-metadata @(rf/subscribe [::subs/scheduler-metadata media-id])
+        categories         @(rf/subscribe [::subs/media-categories media-id])
         jellyfin-url       @(rf/subscribe [::subs/jellyfin-url])
         loading?           (nil? media-item)
         not-found?         (false? media-item)
@@ -253,7 +269,8 @@
                              (merge-metadata media-item scheduler-metadata))
         ctx                {:media-id media-id :media-item media-item :merged merged
                             :remote-key remote-key :jf-link jf-link
-                            :jellyfin-url jellyfin-url :loading? loading?}]
+                            :jellyfin-url jellyfin-url :loading? loading?
+                            :categories categories}]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost

@@ -291,16 +291,39 @@
                [::load-scheduler-metadata-success media-id]
                [::load-scheduler-metadata-failure media-id]]}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::load-scheduler-metadata-success
- (fn [db [_ media-id response]]
-   (assoc-in db [:scheduler-metadata media-id] (:body response))))
+ (fn [{:keys [db]} [_ media-id response]]
+   {:db (assoc-in db [:scheduler-metadata media-id] (:body response))
+    :dispatch [::load-media-categories media-id]}))
 
 (rf/reg-event-db
  ::load-scheduler-metadata-failure
  (fn [db [_ media-id response]]
    (log-request-failure (str "Failed to load scheduler metadata: " media-id) response)
    (assoc-in db [:scheduler-metadata media-id] false)))
+
+(rf/reg-event-fx
+ ::load-media-categories
+ (fn [{:keys [db]} [_ media-id]]
+   {:db db
+    :dispatch [::martian/request
+               :get-api-media-media-id-categories
+               {::martian/instance-id :tunarr-scheduler
+                :media-id (str media-id)}
+               [::load-media-categories-success media-id]
+               [::load-media-categories-failure media-id]]}))
+
+(rf/reg-event-db
+ ::load-media-categories-success
+ (fn [db [_ media-id response]]
+   (assoc-in db [:media-categories media-id] (get-in response [:body :categories]))))
+
+(rf/reg-event-db
+ ::load-media-categories-failure
+ (fn [db [_ media-id response]]
+   (log-request-failure (str "Failed to load media categories: " media-id) response)
+   (assoc-in db [:media-categories media-id] false)))
 
 ;; Library selection and pagination events
 
@@ -348,15 +371,17 @@
 
 (defn- browse-list-op [facet]
   (case facet
-    :tags     :get-api-tags
-    :genres   :get-api-genres
-    :channels :get-api-catalog-channels))
+    :tags       :get-api-tags
+    :genres     :get-api-genres
+    :channels   :get-api-catalog-channels
+    :dimensions :get-api-dimensions))
 
 (defn- browse-media-request [facet value]
   (case facet
-    :tags     [:get-api-tags-tag-media {:tag value}]
-    :genres   [:get-api-genres-genre-media {:genre value}]
-    :channels [:get-api-catalog-channels-channel-name-media {:channel-name value}]))
+    :tags       [:get-api-tags-tag-media {:tag value}]
+    :genres     [:get-api-genres-genre-media {:genre value}]
+    :channels   [:get-api-catalog-channels-channel-name-media {:channel-name value}]
+    :dimensions [:get-api-tags-tag-media {:tag value}] ; dimension:value tag format
 
 (rf/reg-event-fx
  ::load-browse-facet
@@ -376,9 +401,10 @@
  (fn [db [_ facet response]]
    (let [body  (:body response)
          items (case facet
-                 :tags     (:tags body)
-                 :genres   (:genres body)
-                 :channels (:channels body))]
+                 :tags       (:tags body)
+                 :genres     (:genres body)
+                 :channels   (:channels body)
+                 :dimensions (:dimensions body))]
      (assoc-in db [:browse-lists facet] (vec items)))))
 
 (rf/reg-event-db

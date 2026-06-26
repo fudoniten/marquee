@@ -12,9 +12,8 @@
 (def ^:private page-size 24)
 
 (def ^:private facets
-  [{:key :tags     :label "Tags"}
-   {:key :genres   :label "Genres"}
-   {:key :channels :label "Channels"}])
+  [{:key :tags       :label "Tags"}
+   {:key :dimensions :label "Dimensions"}])
 
 (defn- display-str [v]
   (if (keyword? v) (name v) (str v)))
@@ -68,42 +67,27 @@
          ^{:key (:tag t)}
          [tag-card t])])))
 
-(defn genres-list [genres filter-text]
-  (let [visible (filterv #(matches-filter? filter-text %) genres)]
-    (cond
-      (nil? genres)    [:p {:class "text-muted-foreground"} "Loading genres…"]
-      (empty? genres)  [:p {:class "text-muted-foreground"} "No genres found."]
-      (empty? visible) [:p {:class "text-muted-foreground"} "No genres match the filter."]
-      :else
-      [:div {:class "flex flex-wrap gap-2"}
-       (for [g visible]
-         ^{:key g}
-         [button {:variant :outline
-                  :size :sm
-                  :on-click #(rf/dispatch [::events/browse-select-item :genres g])}
-          g])])))
-
-(defn channel-card [{:keys [name full-name description]}]
+(defn dimension-card [{:keys [name value-count]}]
   [card {:class "cursor-pointer transition-colors hover:border-primary/50"
-         :on-click #(rf/dispatch [::events/browse-select-item :channels name])}
+         :on-click #(rf/dispatch [::events/browse-select-item :dimensions name])}
    [card-header {:class "p-4"}
-    [card-title {:class "text-base"} (or full-name name)]
-    (when (and full-name (not= full-name name))
-      [card-description {} name])
-    (when description
-      [card-description {:class "line-clamp-2"} description])]])
+    [card-title {:class "text-base flex items-center justify-between gap-2"}
+     [:span {:class "truncate"} name]
+     (when value-count
+       [:span {:class "shrink-0 inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"}
+        value-count])]]])
 
-(defn channels-list [channels filter-text]
-  (let [visible (filterv #(matches-filter? filter-text (:name %) (:full-name %)) channels)]
+(defn dimensions-list [dimensions filter-text]
+  (let [visible (filterv #(matches-filter? filter-text (:name %)) dimensions)]
     (cond
-      (nil? channels)   [:p {:class "text-muted-foreground"} "Loading channels…"]
-      (empty? channels) [:p {:class "text-muted-foreground"} "No channels found."]
-      (empty? visible)  [:p {:class "text-muted-foreground"} "No channels match the filter."]
+      (nil? dimensions)  [:p {:class "text-muted-foreground"} "Loading dimensions…"]
+      (empty? dimensions) [:p {:class "text-muted-foreground"} "No dimensions found."]
+      (empty? visible)    [:p {:class "text-muted-foreground"} "No dimensions match the filter."]
       :else
       [:div {:class "grid gap-3 sm:grid-cols-2"}
-       (for [ch visible]
-         ^{:key (:name ch)}
-         [channel-card ch])])))
+       (for [d visible]
+         ^{:key (:name d)}
+         [dimension-card d])])))
 
 ;;; ── Media results ───────────────────────────────────────────────────────────
 
@@ -174,6 +158,9 @@
                :size :sm
                :on-click #(rf/dispatch [::events/browse-clear-selection])}
        (str "← All " (str/lower-case (some :label (filter #(= (:key %) facet) facets))))]]
+      (when (= facet :dimensions)
+        [:span {:class "text-sm text-muted-foreground"}
+         "Dimension tag: " selection])]
      [:div
       [:h2 {:class "text-2xl font-semibold"} selection]
       (when items
@@ -210,7 +197,6 @@
        [media-results facet selection]
        [:div {:class "space-y-4"}
         [filter-input filter-text]
-        (case facet
-          :tags     [tags-list entries filter-text]
-          :genres   [genres-list entries filter-text]
-          :channels [channels-list entries filter-text])])]))
+         (case facet
+           :tags       [tags-list entries filter-text]
+           :dimensions [dimensions-list entries filter-text])])]))

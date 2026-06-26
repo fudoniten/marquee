@@ -147,6 +147,11 @@
  (fn [db _]
    (:browse-media-page db 1)))
 
+(rf/reg-sub
+ ::media-categories
+ (fn [db [_ media-id]]
+   (get-in db [:media-categories media-id])))
+
 ;; API documentation browser subscriptions
 
 (rf/reg-sub
