@@ -176,7 +176,7 @@
            ^{:key (or (:id item) (:name item))}
            [media-result-card item facet selection])]
         (when (> total-pages 1)
-          [pagination-controls page total-pages])])]))
+          [pagination-controls page total-pages])])))
 
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
