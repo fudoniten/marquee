@@ -143,6 +143,8 @@
                       (when (= page :channel-schedule)
                         (cond-> (when (nil? (:channels db)) [[::load-channels]])
                           channel-id (conj [::load-channel-events channel-id])))
+                      (when (= page :jobs)
+                        [[::load-jobs]])
                       (when (#{:collections :collection-detail} page)
                         [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
