@@ -226,10 +226,6 @@
          [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Tags"]
          [tag-editor numeric-id
           (or (field-by-name merged "tags") (:tags merged))]]
-       [chip-list "Genres"   (or (field-by-name merged "genres")   (:genres merged))
-        #(rf/dispatch [::events/browse-select-item :genres %])]
-       [chip-list "Channels" (or (field-by-name merged "channels") (:channels merged))
-        #(rf/dispatch [::events/browse-select-item :channels %])]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
        [dimension-chips categories]
        [remaining-fields merged known-fields]])]])

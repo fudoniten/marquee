@@ -35,7 +35,7 @@
     :media-page-size 20
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
-    :browse-facet :tags          ; :tags | :genres | :channels
+     :browse-facet :tags          ; :tags | :dimensions
     :browse-selection nil        ; selected tag/genre/channel name, or nil
     :browse-lists {}             ; facet → vector of facet entries
     :browse-media {}             ; [facet value] → vector of media items
@@ -357,10 +357,15 @@
 ;;
 ;;   GET /api/tags                                  → {:tags [{:tag :usage-count :example-titles}]}
 ;;   GET /api/tags/:tag/media                       → {:media [...]}
-;;   GET /api/genres                                → {:genres ["..."]}
-;;   GET /api/genres/:genre/media                   → {:media [...]}
-;;   GET /api/catalog/channels                      → {:channels [{:name :full-name :description}]}
-;;   GET /api/catalog/channels/:channel-name/media  → {:media [...]}
+;;   GET /api/dimensions                            → {:dimensions [{:name :value-count}]}
+;;   GET /api/dimensions/:dim/values                → {:values [...]}
+;;   GET /api/media/:id/categories                  → {:categories {dim → [value ...]}}
+;;
+;;   NOTE: The following endpoints are DEPRECATED (old hardcoded worldview).
+;;   They are retained here only for URL backwards-compatibility so that old
+;;   bookmarks or direct-nav URLs don't hard-crash the UI:
+;;     GET /api/genres, GET /api/genres/:genre/media
+;;     GET /api/catalog/channels, GET /api/catalog/channels/:channel-name/media
 ;;
 ;; Media items come back with namespaced keys (tunarr.scheduler.media/name);
 ;; we strip the namespaces on receipt so views can use plain :name, :tags, etc.

@@ -1,5 +1,5 @@
 (ns marquee.pages.browse
-  "Browse the Tunarr Scheduler catalog by tag, genre, or channel."
+  "Browse the Tunarr Scheduler catalog by tag or dimension."
   (:require [clojure.string :as str]
             [re-frame.core :as rf]
             [marquee.events :as events]
@@ -92,7 +92,7 @@
 ;;; ── Media results ───────────────────────────────────────────────────────────
 
 (defn- metadata-chips
-  "Clickable chips that jump to browsing by that tag/genre/channel."
+  "Clickable chips that jump to browsing by that tag or dimension."
   [facet values current]
   (when (seq values)
     [:div {:class "flex flex-wrap gap-1.5"}
@@ -108,7 +108,7 @@
 
 (defn media-result-card
   "Card for a media item as returned by the scheduler's browse endpoints."
-  [{:keys [id name overview item-kind type production-year tags genres]} facet selection]
+  [{:keys [id name overview item-kind type production-year tags]} facet selection]
   [card {}
    [card-header {:class "pb-2"}
     [card-title {:class "text-lg"} (or name (str "Item #" id))]
@@ -118,8 +118,7 @@
    [card-content {:class "space-y-2"}
     (when overview
       [:p {:class "text-sm text-muted-foreground line-clamp-3"} overview])
-    [metadata-chips :tags tags (when (= facet :tags) selection)]
-    [metadata-chips :genres genres (when (= facet :genres) selection)]]
+    [metadata-chips :tags tags (when (= facet :tags) selection)]]
    (when id
      [card-footer {}
       [button {:size :sm
@@ -189,7 +188,7 @@
      [:div
       [:h1 {:class "text-3xl font-bold tracking-tight"} "Browse"]
       [:p {:class "text-muted-foreground"}
-       "Explore the catalog by tag, genre, or channel."]]
+       "Explore the catalog by tag or dimension."]]
 
      [facet-tabs facet]
 

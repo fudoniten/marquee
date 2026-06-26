@@ -127,19 +127,16 @@
             [action-btn {:action-key [:sync-pseudovision-tags lib-name]
                          :label      "Sync Tags → Pseudovision"
                          :on-click   #(rf/dispatch [::events/trigger-library-action :sync-pseudovision-tags lib-name])}]]
-           [action-group "AI Curation"
-            [action-btn {:action-key [:retag lib-name]
-                         :label      "Retag"
-                         :on-click   #(rf/dispatch [::events/trigger-library-action :retag lib-name])}]
-            [action-btn {:action-key [:retag-episodes lib-name]
-                         :label      "Retag Episodes"
-                         :on-click   #(rf/dispatch [::events/trigger-library-action :retag-episodes lib-name])}]
-            [action-btn {:action-key [:add-taglines lib-name]
-                         :label      "Add Taglines"
-                         :on-click   #(rf/dispatch [::events/trigger-library-action :add-taglines lib-name])}]
-            [action-btn {:action-key [:recategorize lib-name]
-                         :label      "Recategorize"
-                         :on-click   #(rf/dispatch [::events/trigger-library-action :recategorize lib-name])}]]
+            [action-group "AI Curation"
+             [action-btn {:action-key [:retag-episodes lib-name]
+                          :label      "Retag Episodes"
+                          :on-click   #(rf/dispatch [::events/trigger-library-action :retag-episodes lib-name])}]
+             [action-btn {:action-key [:add-taglines lib-name]
+                          :label      "Add Taglines"
+                          :on-click   #(rf/dispatch [::events/trigger-library-action :add-taglines lib-name])}]
+             [action-btn {:action-key [:recategorize lib-name]
+                          :label      "Recategorize"
+                          :on-click   #(rf/dispatch [::events/trigger-library-action :recategorize lib-name])}]]
            [:p {:class "text-xs text-muted-foreground"}
             "Jobs run in the background — track progress on the "
             [:button {:class "underline"
