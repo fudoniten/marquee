@@ -384,7 +384,7 @@
     :tags       [:get-api-tags-tag-media {:tag value}]
     :genres     [:get-api-genres-genre-media {:genre value}]
     :channels   [:get-api-catalog-channels-channel-name-media {:channel-name value}]
-    :dimensions [:get-api-tags-tag-media {:tag value}] ; dimension:value tag format
+    :dimensions [:get-api-tags-tag-media {:tag value}])) ; dimension:value tag format
 
 (rf/reg-event-fx
  ::load-browse-facet
