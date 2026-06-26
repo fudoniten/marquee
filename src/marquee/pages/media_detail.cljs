@@ -203,7 +203,7 @@
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key jellyfin-url loading? numeric-id]}]
+  [{:keys [merged remote-key jellyfin-url loading? numeric-id categories]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
