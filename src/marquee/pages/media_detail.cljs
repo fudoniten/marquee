@@ -5,6 +5,7 @@
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
+            [marquee.components.action-button :refer [action-btn]]
             [marquee.components.card :refer [card card-content card-header card-title]]))
 
 ;;; ── Utilities ───────────────────────────────────────────────────────────────
@@ -201,6 +202,39 @@
 
 (declare tag-editor)
 
+(defn- curation-card [media-id]
+  [card {}
+   [card-content {:class "pt-6"}
+    [:div {:class "space-y-3"}
+     [:div {:class "flex flex-wrap items-center gap-2"}
+      [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"} "Curation"]
+      [action-btn {:action-key [:retag media-id]
+                   :label "Retag"
+                   :on-click #(rf/dispatch [::events/trigger-media-item-retag media-id])}]
+      [action-btn {:action-key [:recategorize media-id]
+                   :label "Recategorize"
+                   :on-click #(rf/dispatch [::events/trigger-media-item-recategorize media-id])}]
+      [action-btn {:action-key [:sync-pseudovision media-id]
+                   :label "Sync Tags"
+                   :on-click #(rf/dispatch [::events/trigger-media-item-sync-pseudovision media-id])}]]
+     [:div {:class "flex flex-wrap items-center gap-2"}
+      [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"} "Reset"]
+      [action-btn {:action-key [:reset-process media-id "retag"]
+                   :label "Retag"
+                   :variant :ghost
+                   :size :sm
+                   :on-click #(rf/dispatch [::events/trigger-reset-media-item-process media-id "retag"])}]
+      [action-btn {:action-key [:reset-process media-id "recategorize"]
+                   :label "Recategorize"
+                   :variant :ghost
+                   :size :sm
+                   :on-click #(rf/dispatch [::events/trigger-reset-media-item-process media-id "recategorize"])}]
+      [action-btn {:action-key [:reset-process media-id "episode-tagging"]
+                   :label "Episode Tags"
+                   :variant :ghost
+                   :size :sm
+                   :on-click #(rf/dispatch [::events/trigger-reset-media-item-process media-id "episode-tagging"])}]]]]])
+
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
   [{:keys [merged remote-key jellyfin-url loading? numeric-id categories]}]
@@ -341,4 +375,5 @@
      (when-not not-found?
        [:<>
         [hero-section ctx]
-        [detail-card ctx]])]))
+        [detail-card ctx]
+        [curation-card media-id]])]))

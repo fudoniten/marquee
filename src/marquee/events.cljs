@@ -1007,6 +1007,130 @@
    (action-error-fx [action library-name] response)))
 
 ;; ---------------------------------------------------------------------------
+;; Process timestamp reset (library-wide and per-item)
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::trigger-reset-library-process
+ (fn [{:keys [db]} [_ library-name process]]
+   (let [k [:reset-process library-name process]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :delete-api-media-library-process-process-reset
+                 {::martian/instance-id :tunarr-scheduler
+                  :library library-name
+                  :process process}
+                 [::trigger-reset-library-process-success library-name process]
+                 [::trigger-reset-library-process-failure library-name process]]})))
+
+(rf/reg-event-fx
+ ::trigger-reset-library-process-success
+ (fn [_ [_ library-name process _response]]
+   (action-success-fx [:reset-process library-name process]
+                      (str "Reset " process " for " library-name))))
+
+(rf/reg-event-fx
+ ::trigger-reset-library-process-failure
+ (fn [_ [_ library-name process response]]
+   (action-error-fx [:reset-process library-name process] response)))
+
+(rf/reg-event-fx
+ ::trigger-reset-media-item-process
+ (fn [{:keys [db]} [_ media-id process]]
+   (let [k [:reset-process media-id process]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :delete-api-media-item-media-id-process-process-reset
+                 {::martian/instance-id :tunarr-scheduler
+                  :media-id (str media-id)
+                  :process process}
+                 [::trigger-reset-media-item-process-success media-id process]
+                 [::trigger-reset-media-item-process-failure media-id process]]})))
+
+(rf/reg-event-fx
+ ::trigger-reset-media-item-process-success
+ (fn [_ [_ media-id process _response]]
+   (action-success-fx [:reset-process media-id process]
+                      (str "Reset " process))))
+
+(rf/reg-event-fx
+ ::trigger-reset-media-item-process-failure
+ (fn [_ [_ media-id process response]]
+   (action-error-fx [:reset-process media-id process] response)))
+
+;; ---------------------------------------------------------------------------
+;; Per-item curation actions
+;; ---------------------------------------------------------------------------
+
+(rf/reg-event-fx
+ ::trigger-media-item-retag
+ (fn [{:keys [db]} [_ media-id]]
+   (let [k [:retag media-id]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-item-media-id-retag
+                 {::martian/instance-id :tunarr-scheduler
+                  :media-id (str media-id)}
+                 [::trigger-media-item-retag-success media-id]
+                 [::trigger-media-item-retag-failure media-id]]})))
+
+(rf/reg-event-fx
+ ::trigger-media-item-retag-success
+ (fn [_ [_ media-id _response]]
+   (action-success-fx [:retag media-id] "Retag submitted")))
+
+(rf/reg-event-fx
+ ::trigger-media-item-retag-failure
+ (fn [_ [_ media-id response]]
+   (action-error-fx [:retag media-id] response)))
+
+(rf/reg-event-fx
+ ::trigger-media-item-recategorize
+ (fn [{:keys [db]} [_ media-id]]
+   (let [k [:recategorize media-id]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-item-media-id-recategorize
+                 {::martian/instance-id :tunarr-scheduler
+                  :media-id (str media-id)}
+                 [::trigger-media-item-recategorize-success media-id]
+                 [::trigger-media-item-recategorize-failure media-id]]})))
+
+(rf/reg-event-fx
+ ::trigger-media-item-recategorize-success
+ (fn [_ [_ media-id _response]]
+   (action-success-fx [:recategorize media-id] "Recategorize submitted")))
+
+(rf/reg-event-fx
+ ::trigger-media-item-recategorize-failure
+ (fn [_ [_ media-id response]]
+   (action-error-fx [:recategorize media-id] response)))
+
+(rf/reg-event-fx
+ ::trigger-media-item-sync-pseudovision
+ (fn [{:keys [db]} [_ media-id]]
+   (let [k [:sync-pseudovision media-id]]
+     {:db       (assoc-in db [:action-states k] {:status :loading})
+      :dispatch [::martian/request
+                 :post-api-media-item-media-id-sync-pseudovision
+                 {::martian/instance-id :tunarr-scheduler
+                  :media-id (str media-id)}
+                 [::trigger-media-item-sync-pseudovision-success media-id]
+                 [::trigger-media-item-sync-pseudovision-failure media-id]]})))
+
+(rf/reg-event-fx
+ ::trigger-media-item-sync-pseudovision-success
+ (fn [{:keys [db]} [_ media-id _response]]
+   (update (action-success-fx [:sync-pseudovision media-id] "Tags synced to Pseudovision")
+           :dispatch-n (fnil conj [])
+           [::load-media-item media-id])))
+
+(rf/reg-event-fx
+ ::trigger-media-item-sync-pseudovision-failure
+ (fn [_ [_ media-id response]]
+   (action-error-fx [:sync-pseudovision media-id] response)))
+
+;; ---------------------------------------------------------------------------
 ;; Tag curation tasks (catalog-wide, async jobs in Tunarr Scheduler)
 ;;
 ;;   POST /api/media/tags/audit?dry-run=true

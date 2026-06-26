@@ -136,7 +136,17 @@
                           :on-click   #(rf/dispatch [::events/trigger-library-action :add-taglines lib-name])}]
              [action-btn {:action-key [:recategorize lib-name]
                           :label      "Recategorize"
-                          :on-click   #(rf/dispatch [::events/trigger-library-action :recategorize lib-name])}]]
+                           :on-click   #(rf/dispatch [::events/trigger-library-action :recategorize lib-name])}]]
+            [action-group "Reset Timestamps"
+             [action-btn {:action-key [:reset-process lib-name "retag"]
+                          :label      "Reset Retag"
+                          :on-click   #(rf/dispatch [::events/trigger-reset-library-process lib-name "retag"])}]
+             [action-btn {:action-key [:reset-process lib-name "recategorize"]
+                          :label      "Reset Recategorize"
+                          :on-click   #(rf/dispatch [::events/trigger-reset-library-process lib-name "recategorize"])}]
+             [action-btn {:action-key [:reset-process lib-name "episode-tagging"]
+                          :label      "Reset Episode Tags"
+                          :on-click   #(rf/dispatch [::events/trigger-reset-library-process lib-name "episode-tagging"])}]]
            [:p {:class "text-xs text-muted-foreground"}
             "Jobs run in the background — track progress on the "
             [:button {:class "underline"
