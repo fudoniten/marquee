@@ -411,12 +411,9 @@
 (defn- browse-media-request [facet value]
   (case facet
     :tags       [:get-api-tags-tag-media {:tag value}]
-    ;; The scheduler's tag endpoint does not support dimension:value
-    ;; filtering, so fall back to the deprecated genre endpoint for
-    ;; genre-based browsing.
-    :dimensions (if (clojure.string/starts-with? value "genre:")
-                  [:get-api-genres-genre-media {:genre (subs value 6)}]
-                  [:get-api-tags-tag-media {:tag value}])))
+    :dimensions (let [[dimension dim-value] (clojure.string/split value #":" 2)]
+                  [:get-api-dimensions-dimension-values-value-media 
+                   {:dimension dimension :value dim-value}])))
 
 (rf/reg-event-fx
  ::load-browse-facet
