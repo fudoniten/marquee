@@ -301,12 +301,12 @@
                :get-api-media-item-media-id
                {::martian/instance-id :tunarr-scheduler
                 :media-id remote-key}
-               [::load-scheduler-metadata-success media-id]
+               [::load-scheduler-metadata-success media-id remote-key]
                [::load-scheduler-metadata-failure media-id]]}))
 
 (rf/reg-event-fx
  ::load-scheduler-metadata-success
- (fn [{:keys [db]} [_ media-id response]]
+ (fn [{:keys [db]} [_ media-id remote-key response]]
    (let [metadata      (:body response)
          ;; Fallback: extract dimension data from the scheduler metadata itself
          ;; when the dedicated /categories endpoint is broken.
