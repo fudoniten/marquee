@@ -294,21 +294,40 @@
 
 (rf/reg-event-fx
  ::load-scheduler-metadata
- (fn [{:keys [db]} [_ media-id _]]
-   ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
+ (fn [{:keys [db]} [_ media-id remote-key]]
+   ;; Tunarr Scheduler keys its catalog by Jellyfin ID (remote-key), not Pseudovision's numeric id.
    {:db db
     :dispatch [::martian/request
                :get-api-media-item-media-id
                {::martian/instance-id :tunarr-scheduler
-                :media-id (str media-id)}
+                :media-id remote-key}
                [::load-scheduler-metadata-success media-id]
                [::load-scheduler-metadata-failure media-id]]}))
 
 (rf/reg-event-fx
  ::load-scheduler-metadata-success
  (fn [{:keys [db]} [_ media-id response]]
-   {:db (assoc-in db [:scheduler-metadata media-id] (:body response))
-    :dispatch [::load-media-categories media-id]}))
+   (let [metadata      (:body response)
+         ;; Fallback: extract dimension data from the scheduler metadata itself
+         ;; when the dedicated /categories endpoint is broken.
+         fallback-cats (when (map? metadata)
+                         (->> (select-keys metadata
+                                           [:tunarr.scheduler.media/tags
+                                            :tunarr.scheduler.media/genres
+                                            :tunarr.scheduler.media/channel-names])
+                              (map (fn [[k v]]
+                                     [(case k
+                                        :tunarr.scheduler.media/tags        "tag"
+                                        :tunarr.scheduler.media/genres      "genre"
+                                        :tunarr.scheduler.media/channel-names "channel"
+                                        (name k))
+                                      v]))
+                              (into {})))]
+     {:db (-> db
+              (assoc-in [:scheduler-metadata media-id] metadata)
+              (assoc-in [:media-categories media-id] (or fallback-cats
+                                                         (get-in db [:media-categories media-id]))))
+      :dispatch [::load-media-categories media-id remote-key]})))
 
 (rf/reg-event-db
  ::load-scheduler-metadata-failure
@@ -318,12 +337,12 @@
 
 (rf/reg-event-fx
  ::load-media-categories
- (fn [{:keys [db]} [_ media-id]]
+ (fn [{:keys [db]} [_ media-id remote-key]]
    {:db db
     :dispatch [::martian/request
                :get-api-media-media-id-categories
                {::martian/instance-id :tunarr-scheduler
-                :media-id (str media-id)}
+                :media-id remote-key}
                [::load-media-categories-success media-id]
                [::load-media-categories-failure media-id]]}))
 
@@ -336,7 +355,12 @@
  ::load-media-categories-failure
  (fn [db [_ media-id response]]
    (log-request-failure (str "Failed to load media categories: " media-id) response)
-   (assoc-in db [:media-categories media-id] false)))
+   ;; Preserve fallback categories extracted from scheduler metadata if present.
+   (update-in db [:media-categories media-id]
+              (fn [existing]
+                (if (map? existing)
+                  existing
+                  false)))))
 
 ;; Library selection and pagination events
 
@@ -387,7 +411,12 @@
 (defn- browse-media-request [facet value]
   (case facet
     :tags       [:get-api-tags-tag-media {:tag value}]
-    :dimensions [:get-api-tags-tag-media {:tag value}])) ; dimension:value tag format
+    ;; The scheduler's tag endpoint does not support dimension:value
+    ;; filtering, so fall back to the deprecated genre endpoint for
+    ;; genre-based browsing.
+    :dimensions (if (clojure.string/starts-with? value "genre:")
+                  [:get-api-genres-genre-media {:genre (subs value 6)}]
+                  [:get-api-tags-tag-media {:tag value}])))
 
 (rf/reg-event-fx
  ::load-browse-facet
@@ -411,11 +440,41 @@
                  :dimensions (:dimensions body))]
      (assoc-in db [:browse-lists facet] (vec items)))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::load-browse-facet-failure
- (fn [db [_ facet response]]
+ (fn [{:keys [db]} [_ facet response]]
    (log-request-failure (str "Failed to load browse facet: " (name facet)) response)
-   (assoc-in db [:browse-lists facet] [])))
+   (if (= facet :dimensions)
+     {:db (assoc-in db [:browse-lists :dimensions] [])
+      :dispatch [::load-genres-as-dimensions]}
+      {:db (assoc-in db [:browse-lists facet] [])})))
+
+;; Fallback: when /api/dimensions is broken, load the genres list and
+;; surface it as a single synthetic dimension so the facet is not empty.
+(rf/reg-event-fx
+ ::load-genres-as-dimensions
+ (fn [{:keys [db]} _]
+   {:db db
+    :dispatch [::martian/request
+               :get-api-genres
+               {::martian/instance-id :tunarr-scheduler}
+               [::load-genres-as-dimensions-success]
+               [::load-genres-as-dimensions-failure]]}))
+
+(rf/reg-event-db
+ ::load-genres-as-dimensions-success
+ (fn [db [_ response]]
+   (let [genres (get-in response [:body :genres])]
+     (-> db
+         (assoc-in [:browse-lists :dimensions]
+                   [{:name "genre" :value-count (count genres)}])
+         (assoc-in [:dimension-values "genre"] (vec genres))))))
+
+(rf/reg-event-db
+ ::load-genres-as-dimensions-failure
+ (fn [db [_ response]]
+   (log-request-failure "Failed to load genres as fallback:" response)
+   (assoc-in db [:browse-lists :dimensions] [])))
 
 (rf/reg-event-fx
  ::load-browse-media
