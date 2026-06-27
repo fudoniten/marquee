@@ -69,7 +69,7 @@
 
 (defn dimension-card [{:keys [name value-count]}]
   [card {:class "cursor-pointer transition-colors hover:border-primary/50"
-         :on-click #(rf/dispatch [::events/browse-select-item :dimensions name])}
+         :on-click #(rf/dispatch [::events/browse-select-dimension name])}
    [card-header {:class "p-4"}
     [card-title {:class "text-base flex items-center justify-between gap-2"}
      [:span {:class "truncate"} name]
@@ -83,11 +83,31 @@
       (nil? dimensions)  [:p {:class "text-muted-foreground"} "Loading dimensions…"]
       (empty? dimensions) [:p {:class "text-muted-foreground"} "No dimensions found."]
       (empty? visible)    [:p {:class "text-muted-foreground"} "No dimensions match the filter."]
+   :else
+   [:div {:class "grid gap-3 sm:grid-cols-2"}
+    (for [d visible]
+      ^{:key (:name d)}
+      [dimension-card d])])))
+
+;;; ── Dimension value drill-down ─────────────────────────────────────────────
+
+(defn dimension-value-card [dim-name value]
+  [card {:class "cursor-pointer transition-colors hover:border-primary/50"
+         :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim-name ":" value)])}
+   [card-header {:class "p-4"}
+    [card-title {:class "text-base"} (str value)]]])
+
+(defn dimension-values-list [dim-name values filter-text]
+  (let [visible (filterv #(matches-filter? filter-text %) values)]
+    (cond
+      (nil? values)     [:p {:class "text-muted-foreground"} (str "Loading " dim-name " values…")]
+      (empty? values)   [:p {:class "text-muted-foreground"} (str "No values found for " dim-name ".")]
+      (empty? visible)  [:p {:class "text-muted-foreground"} "No values match the filter."]
       :else
       [:div {:class "grid gap-3 sm:grid-cols-2"}
-       (for [d visible]
-         ^{:key (:name d)}
-         [dimension-card d])])))
+       (for [v visible]
+         ^{:key v}
+         [dimension-value-card dim-name v])])))
 
 ;;; ── Media results ───────────────────────────────────────────────────────────
 
@@ -182,6 +202,8 @@
 (defn page []
   (let [facet       @(rf/subscribe [::subs/browse-facet])
         selection   @(rf/subscribe [::subs/browse-selection])
+        dim-name    @(rf/subscribe [::subs/browse-dimension])
+        dim-values  @(rf/subscribe [::subs/dimension-values dim-name])
         filter-text @(rf/subscribe [::subs/browse-filter])
         entries     @(rf/subscribe [::subs/browse-list facet])]
     [:div {:class "space-y-6"}
@@ -196,6 +218,16 @@
        [media-results facet selection]
        [:div {:class "space-y-4"}
         [filter-input filter-text]
-         (case facet
-           :tags       [tags-list entries filter-text]
-           :dimensions [dimensions-list entries filter-text])])]))
+        (case facet
+          :tags       [tags-list entries filter-text]
+          :dimensions (if dim-name
+                        [:div {:class "space-y-4"}
+                         [:div {:class "flex items-center gap-3"}
+                          [button {:variant :ghost
+                                   :size :sm
+                                   :on-click #(rf/dispatch [::events/browse-clear-selection])}
+                           "← All dimensions"]
+                          [:span {:class "text-sm text-muted-foreground font-medium"}
+                           (str "Dimension: " dim-name)]]
+                         [dimension-values-list dim-name dim-values filter-text]]
+                        [dimensions-list entries filter-text]))])]))

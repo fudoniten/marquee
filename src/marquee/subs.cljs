@@ -157,6 +157,16 @@
  (fn [db [_ media-id]]
    (get-in db [:media-categories media-id])))
 
+(rf/reg-sub
+ ::browse-dimension
+ (fn [db _]
+   (:browse-dimension db)))
+
+(rf/reg-sub
+ ::dimension-values
+ (fn [db [_ dim-name]]
+   (get-in db [:dimension-values dim-name])))
+
 ;; API documentation browser subscriptions
 
 (rf/reg-sub

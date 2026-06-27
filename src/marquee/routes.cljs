@@ -37,7 +37,7 @@
     "/schedule"  {:page :schedule-grid}
      (or (when-let [[_ id] (re-matches #"/media/(.+)" path)]
            {:page :media-detail :media-id id})
-         (when-let [[_ facet sel] (re-matches #"/browse/(tags|genres|channels|dimensions)(?:/(.+))?" path)]
+         (when-let [[_ facet sel] (re-matches #"/browse/(tags|dimensions)(?:/(.+))?" path)]
            {:page      :browse
             :facet     (keyword facet)
             :selection (when sel (js/decodeURIComponent sel))})

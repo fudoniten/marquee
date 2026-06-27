@@ -357,7 +357,8 @@
         ctx                {:media-id media-id :media-item media-item :merged merged
                             :remote-key remote-key :jf-link jf-link
                             :jellyfin-url jellyfin-url :loading? loading?
-                            :numeric-id numeric-id}]
+                            :numeric-id numeric-id
+                            :categories categories}]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost

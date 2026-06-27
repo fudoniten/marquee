@@ -35,10 +35,12 @@
     :media-page-size 20
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
-     :browse-facet :tags          ; :tags | :dimensions
-    :browse-selection nil        ; selected tag/genre/channel name, or nil
+    :browse-facet :tags          ; :tags | :dimensions
+    :browse-selection nil        ; selected tag or dimension:value, or nil
     :browse-lists {}             ; facet → vector of facet entries
     :browse-media {}             ; [facet value] → vector of media items
+    :browse-dimension nil        ; selected dimension name for value drill-down
+    :dimension-values {}         ; dimension name → vector of values
     :browse-media-page 1
     :browse-filter ""
     :api-specs {}
@@ -93,18 +95,18 @@
  ::navigate
  (fn [{:keys [db]} [_ page]]
    (let [dispatches (concat
-                      (when (= page :media)
-                        [[::load-media-libraries] [::set-media-page 1]])
-                      (when (= page :browse)
-                        [[::load-browse-facet (or (:browse-facet db) :tags)]])
-                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
-                        [[::select-api-service :pseudovision]])
-                      (when (= page :schedule-grid)
-                        [[::load-channels]])
-                      (when (= page :jobs)
-                        [[::load-jobs]])
-                      (when (= page :collections)
-                        [[::load-collections]]))]
+                     (when (= page :media)
+                       [[::load-media-libraries] [::set-media-page 1]])
+                     (when (= page :browse)
+                       [[::load-browse-facet (or (:browse-facet db) :tags)]])
+                     (when (and (= page :api-docs) (nil? (:api-selected-service db)))
+                       [[::select-api-service :pseudovision]])
+                     (when (= page :schedule-grid)
+                       [[::load-channels]])
+                     (when (= page :jobs)
+                       [[::load-jobs]])
+                     (when (= page :collections)
+                       [[::load-collections]]))]
      (cond-> {:db           (cond-> (assoc db :active-page page)
                               (= page :browse) (assoc :browse-selection nil)
                               (= page :collections) (assoc :current-collection-id nil))
@@ -129,29 +131,35 @@
    (let [{:keys [page media-id channel-id collection-id facet selection]}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
-                      (when (= page :media)
-                        [[::load-media-libraries] [::set-media-page 1]])
-                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
-                        [[::select-api-service :pseudovision]])
-                      (when (= page :media-detail)
-                        [[::load-media-item media-id]])
-                      (when (= page :browse)
-                        (cond-> [[::load-browse-facet (or facet :tags)]]
-                          selection (conj [::load-browse-media (or facet :tags) selection])))
-                      (when (= page :schedule-grid)
-                        [[::load-channels]])
-                      (when (= page :channel-schedule)
-                        (cond-> (when (nil? (:channels db)) [[::load-channels]])
-                          channel-id (conj [::load-channel-events channel-id])))
-                      (when (= page :jobs)
-                        [[::load-jobs]])
-                      (when (#{:collections :collection-detail} page)
-                        [[::load-collections]]))]
+                     (when (= page :media)
+                       [[::load-media-libraries] [::set-media-page 1]])
+                     (when (and (= page :api-docs) (nil? (:api-selected-service db)))
+                       [[::select-api-service :pseudovision]])
+                     (when (= page :media-detail)
+                       [[::load-media-item media-id]])
+                     (when (= page :browse)
+                       (cond-> [[::load-browse-facet (or facet :tags)]]
+                         selection (conj (if (and (= facet :dimensions)
+                                                  (not (clojure.string/includes? selection ":")))
+                                           [::load-dimension-values selection]
+                                           [::load-browse-media (or facet :tags) selection]))))
+                     (when (= page :schedule-grid)
+                       [[::load-channels]])
+                     (when (= page :channel-schedule)
+                       (cond-> (when (nil? (:channels db)) [[::load-channels]])
+                         channel-id (conj [::load-channel-events channel-id])))
+                     (when (= page :jobs)
+                       [[::load-jobs]])
+                     (when (#{:collections :collection-detail} page)
+                       [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media-detail)      (assoc :current-media-id media-id)
                     (= page :browse)            (assoc :browse-facet (or facet :tags)
-                                                       :browse-selection selection
                                                        :browse-media-page 1)
+                    (and (= page :browse) selection (or (not= facet :dimensions) (clojure.string/includes? selection ":")))
+                    (assoc :browse-selection selection)
+                    (and (= page :browse) (= facet :dimensions) selection (not (clojure.string/includes? selection ":")))
+                    (assoc :browse-dimension selection)
                     (= page :channel-schedule)  (assoc :current-channel-id channel-id)
                     (= page :collection-detail) (assoc :current-collection-id collection-id))}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
@@ -241,7 +249,7 @@
      ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
      (if remote-key
        {:db db :dispatch-n [[::load-scheduler-metadata media-id remote-key]
-                             [::load-media-tags numeric-id]]}
+                            [::load-media-tags numeric-id]]}
        {:db (assoc-in db [:scheduler-metadata media-id] false)
         :dispatch [::load-media-tags numeric-id]}))))
 
@@ -286,7 +294,7 @@
 
 (rf/reg-event-fx
  ::load-scheduler-metadata
- (fn [{:keys [db]} [_ media-id remote-key]]
+ (fn [{:keys [db]} [_ media-id _]]
    ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
    {:db db
     :dispatch [::martian/request
@@ -362,15 +370,7 @@
 ;;   GET /api/dimensions                            → {:dimensions [{:name :value-count}]}
 ;;   GET /api/dimensions/:dim/values                → {:values [...]}
 ;;   GET /api/media/:id/categories                  → {:categories {dim → [value ...]}}
-;;
-;;   NOTE: The following endpoints are DEPRECATED (old hardcoded worldview).
-;;   They are retained here only for URL backwards-compatibility so that old
-;;   bookmarks or direct-nav URLs don't hard-crash the UI:
-;;     GET /api/genres, GET /api/genres/:genre/media
-;;     GET /api/catalog/channels, GET /api/catalog/channels/:channel-name/media
-;;
-;; Media items come back with namespaced keys (tunarr.scheduler.media/name);
-;; we strip the namespaces on receipt so views can use plain :name, :tags, etc.
+;; ---------------------------------------------------------------------------
 ;; ---------------------------------------------------------------------------
 
 (defn- key-name [k]
@@ -382,15 +382,11 @@
 (defn- browse-list-op [facet]
   (case facet
     :tags       :get-api-tags
-    :genres     :get-api-genres
-    :channels   :get-api-catalog-channels
     :dimensions :get-api-dimensions))
 
 (defn- browse-media-request [facet value]
   (case facet
     :tags       [:get-api-tags-tag-media {:tag value}]
-    :genres     [:get-api-genres-genre-media {:genre value}]
-    :channels   [:get-api-catalog-channels-channel-name-media {:channel-name value}]
     :dimensions [:get-api-tags-tag-media {:tag value}])) ; dimension:value tag format
 
 (rf/reg-event-fx
@@ -412,8 +408,6 @@
    (let [body  (:body response)
          items (case facet
                  :tags       (:tags body)
-                 :genres     (:genres body)
-                 :channels   (:channels body)
                  :dimensions (:dimensions body))]
      (assoc-in db [:browse-lists facet] (vec items)))))
 
@@ -456,6 +450,7 @@
                          :active-page :browse
                          :browse-facet facet
                          :browse-selection nil
+                         :browse-dimension nil
                          :browse-filter ""
                          :browse-media-page 1)
     :push-history (routes/browse-path facet)
@@ -477,9 +472,45 @@
  ::browse-clear-selection
  (fn [{:keys [db]} [_]]
    (let [facet (:browse-facet db :tags)]
-     {:db           (assoc db :browse-selection nil :browse-media-page 1)
+     {:db           (assoc db :browse-selection nil :browse-dimension nil :browse-media-page 1)
       :push-history (routes/browse-path facet)
       :dispatch     [::load-browse-facet facet]})))
+
+(rf/reg-event-fx
+ ::browse-select-dimension
+ (fn [{:keys [db]} [_ dim-name]]
+   {:db           (assoc db
+                         :active-page :browse
+                         :browse-facet :dimensions
+                         :browse-dimension dim-name
+                         :browse-selection nil
+                         :browse-media-page 1)
+    :push-history (routes/browse-path :dimensions)
+    :dispatch     [::load-dimension-values dim-name]}))
+
+(rf/reg-event-fx
+ ::load-dimension-values
+ (fn [{:keys [db]} [_ dim-name]]
+   (if (get-in db [:dimension-values dim-name])
+     {:db db}
+     {:db db
+      :dispatch [::martian/request
+                 :get-api-dimensions-dim-values
+                 {::martian/instance-id :tunarr-scheduler
+                  :dim dim-name}
+                 [::load-dimension-values-success dim-name]
+                 [::load-dimension-values-failure dim-name]]})))
+
+(rf/reg-event-db
+ ::load-dimension-values-success
+ (fn [db [_ dim-name response]]
+   (assoc-in db [:dimension-values dim-name] (get-in response [:body :values]))))
+
+(rf/reg-event-db
+ ::load-dimension-values-failure
+ (fn [db [_ dim-name response]]
+   (log-request-failure (str "Failed to load dimension values: " dim-name) response)
+   (assoc-in db [:dimension-values dim-name] [])))
 
 (rf/reg-event-db
  ::set-browse-filter
@@ -791,8 +822,8 @@
         trace (get-in response [:body :trace])]
     (when trace
       (js/console.error "Server trace for" (pr-str action-key) "\n" trace))
-     {:dispatch   [::set-action-state action-key :error err]
-      ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+    {:dispatch   [::set-action-state action-key :error err]
+     ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
 
 ;; ---------------------------------------------------------------------------
 ;; Media tag management
