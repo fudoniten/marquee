@@ -33,6 +33,7 @@
     :selected-library-id nil
     :media-current-page 1
     :media-page-size 20
+    :media-filter ""             ; text filter over the selected library's items
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
     :browse-facet :tags          ; :tags | :dimensions
@@ -67,6 +68,7 @@
     ;; Collections (persisted to localStorage)
     :collections {}              ; id → {:id :name :items [media-id ...] :created-at ms}
     :current-collection-id nil
+    :collection-filter ""        ; text filter over a collection's items
     :new-collection-name ""
     :add-to-collection-open? false}))
 
@@ -370,7 +372,8 @@
    (let [already-loaded? (get-in db [:library-items library-id])]
      (cond-> {:db (-> db
                       (assoc :selected-library-id library-id)
-                      (assoc :media-current-page 1))}
+                      (assoc :media-current-page 1)
+                      (assoc :media-filter ""))}
        (not already-loaded?)
        (assoc :dispatch [::load-library-items library-id])))))
 
@@ -384,6 +387,16 @@
  (fn [db [_ size]]
    (-> db
        (assoc :media-page-size size)
+       (assoc :media-current-page 1))))
+
+;; Filtering the loaded library items happens client-side (the whole library is
+;; already in memory), so this just stores the needle and resets to page 1 so
+;; the user always lands on the first page of matches.
+(rf/reg-event-db
+ ::set-media-filter
+ (fn [db [_ text]]
+   (-> db
+       (assoc :media-filter text)
        (assoc :media-current-page 1))))
 
 ;; ---------------------------------------------------------------------------
@@ -1311,6 +1324,11 @@
        (seq dispatches) (assoc :dispatch-n dispatches)))))
 
 (rf/reg-event-db
+ ::set-collection-filter
+ (fn [db [_ text]]
+   (assoc db :collection-filter text)))
+
+(rf/reg-event-db
  ::set-new-collection-name
  (fn [db [_ name]]
    (assoc db :new-collection-name name)))
@@ -1373,6 +1391,7 @@
          dispatches (mapv (fn [mid] [::load-media-item mid]) items)]
      {:db           (-> db
                         (assoc :active-page :collection-detail)
-                        (assoc :current-collection-id collection-id))
+                        (assoc :current-collection-id collection-id)
+                        (assoc :collection-filter ""))
       :push-history (routes/collection-path collection-id)
       :dispatch-n   dispatches})))
