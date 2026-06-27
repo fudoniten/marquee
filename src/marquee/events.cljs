@@ -554,9 +554,9 @@
      {:db db}
      {:db db
       :dispatch [::martian/request
-                 :get-api-dimensions-dim-values
+                 :get-api-dimensions-dimension-values
                  {::martian/instance-id :tunarr-scheduler
-                  :dim dim-name}
+                  :dimension dim-name}
                  [::load-dimension-values-success dim-name]
                  [::load-dimension-values-failure dim-name]]})))
 
