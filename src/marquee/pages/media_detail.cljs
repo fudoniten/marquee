@@ -297,8 +297,10 @@
 (defn- tag-editor [numeric-id scheduler-tags]
   (let [new-tag (r/atom "")]
     (fn [numeric-id scheduler-tags]
-      (let [pv-tags   (mapv str @(rf/subscribe [::subs/media-tags numeric-id]))
-            sched-tags (mapv str (or scheduler-tags []))
+      (let [pv-tags   (mapv (fn [t] (if (keyword? t) (name t) (str t))) 
+                           @(rf/subscribe [::subs/media-tags numeric-id]))
+            sched-tags (mapv (fn [t] (if (keyword? t) (name t) (str t))) 
+                            (or scheduler-tags []))
             pv-set    (set pv-tags)
             all-tags  (vec (distinct (concat pv-tags sched-tags)))]
         [:div {:class "space-y-2"}
