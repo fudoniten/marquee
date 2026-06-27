@@ -91,14 +91,18 @@
 
 ;;; ── Dimension value drill-down ─────────────────────────────────────────────
 
-(defn dimension-value-card [dim-name value]
+(defn dimension-value-card [dim-name {:keys [value usage-count]}]
   [card {:class "cursor-pointer transition-colors hover:border-primary/50"
          :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim-name ":" value)])}
    [card-header {:class "p-4"}
-    [card-title {:class "text-base"} (str value)]]])
+    [card-title {:class "text-base flex items-center justify-between gap-2"}
+     [:span {:class "truncate"} value]
+     (when usage-count
+       [:span {:class "shrink-0 inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"}
+        usage-count])]]])
 
 (defn dimension-values-list [dim-name values filter-text]
-  (let [visible (filterv #(matches-filter? filter-text %) values)]
+  (let [visible (filterv #(matches-filter? filter-text (:value %)) values)]
     (cond
       (nil? values)     [:p {:class "text-muted-foreground"} (str "Loading " dim-name " values…")]
       (empty? values)   [:p {:class "text-muted-foreground"} (str "No values found for " dim-name ".")]
@@ -106,7 +110,7 @@
       :else
       [:div {:class "grid gap-3 sm:grid-cols-2"}
        (for [v visible]
-         ^{:key v}
+         ^{:key (:value v)}
          [dimension-value-card dim-name v])])))
 
 ;;; ── Media results ───────────────────────────────────────────────────────────
