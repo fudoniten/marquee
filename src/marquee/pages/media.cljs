@@ -1,5 +1,6 @@
 (ns marquee.pages.media
-  (:require [re-frame.core :as rf]
+  (:require [clojure.string :as str]
+            [re-frame.core :as rf]
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
@@ -56,6 +57,13 @@
       ^{:key (:id lib)}
       [:option {:value (:id lib)} (:name lib)])]])
 
+(defn filter-input [value]
+  [:input {:type        "search"
+           :class       "flex h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+           :placeholder "Filter items…"
+           :value       value
+           :on-change   #(rf/dispatch [::events/set-media-filter (.. % -target -value)])}])
+
 (defn pagination-controls [current-page total-pages]
   (let [has-prev (> current-page 1)
         has-next (< current-page total-pages)]
@@ -86,6 +94,8 @@
   (let [libraries @(rf/subscribe [::subs/media-libraries])
         selected-library-id @(rf/subscribe [::subs/selected-library-id])
         all-items @(rf/subscribe [::subs/library-items selected-library-id])
+        filter-text @(rf/subscribe [::subs/media-filter])
+        filtered-items @(rf/subscribe [::subs/filtered-media-items])
         current-page @(rf/subscribe [::subs/media-current-page])
         paginated-items @(rf/subscribe [::subs/paginated-media-items])
         total-pages @(rf/subscribe [::subs/media-total-pages])
@@ -163,21 +173,30 @@
            [:h2 {:class "text-2xl font-semibold"} (:name selected-library)]
            (when all-items
              [:p {:class "text-sm text-muted-foreground"}
-              (str (count all-items) " items total")])])
+              (if (str/blank? filter-text)
+                (str (count all-items) " items total")
+                (str (count filtered-items) " of " (count all-items) " items match"))])])
+
+        ;; Filter box — only useful once there are items to narrow.
+        (when (seq all-items)
+          [:div {:class "mb-4"}
+           [filter-input filter-text]])
 
         ;; Loading items
         (cond
           (nil? all-items)
           [:p {:class "text-muted-foreground"} "Loading items..."]
 
+          (empty? all-items)
+          [:p {:class "text-muted-foreground"} "No items in this library."]
+
+          (empty? filtered-items)
+          [:p {:class "text-muted-foreground"} "No items match your filter."]
+
           ;; Display items
-          (seq all-items)
+          :else
           [:div
            [media-grid paginated-items]
            (when (> total-pages 1)
-             [pagination-controls current-page total-pages])]
-
-          ;; No items
-          :else
-          [:p {:class "text-muted-foreground"} "No items in this library."])])]))
+             [pagination-controls current-page total-pages])])])]))
 

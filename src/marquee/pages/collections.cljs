@@ -64,9 +64,18 @@
              :on-click #(rf/dispatch [::events/remove-from-collection collection-id id])}
      "Remove"]]])
 
+(defn- filter-input [value]
+  [:input {:type        "search"
+           :class       "flex h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+           :placeholder "Filter items…"
+           :value       value
+           :on-change   #(rf/dispatch [::events/set-collection-filter (.. % -target -value)])}])
+
 (defn- collection-detail [collection-id]
-  (let [collection @(rf/subscribe [::subs/collection collection-id])
-        items      @(rf/subscribe [::subs/collection-items collection-id])]
+  (let [collection  @(rf/subscribe [::subs/collection collection-id])
+        items       @(rf/subscribe [::subs/collection-items collection-id])
+        filter-text @(rf/subscribe [::subs/collection-filter])
+        filtered    @(rf/subscribe [::subs/filtered-collection-items collection-id])]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-center gap-4"}
       [button {:variant  :ghost
@@ -83,7 +92,14 @@
      [:div
       [:h1 {:class "text-3xl font-bold tracking-tight"} (:name collection)]
       [:p {:class "text-muted-foreground"}
-       (str (count (:items collection)) " item" (when (not= 1 (count (:items collection))) "s"))]]
+       (let [total (count (:items collection))]
+         (if (str/blank? filter-text)
+           (str total " item" (when (not= 1 total) "s"))
+           (str (count filtered) " of " total " items match")))]]
+
+     ;; Filter box — only useful once items have loaded.
+     (when (seq items)
+       [filter-input filter-text])
 
      (cond
        (empty? (:items collection))
@@ -92,9 +108,12 @@
        (nil? items)
        [:p {:class "text-muted-foreground"} "Loading items…"]
 
+       (empty? filtered)
+       [:p {:class "text-muted-foreground"} "No items match your filter."]
+
        :else
        [:div {:class "grid gap-4"}
-        (for [item items]
+        (for [item filtered]
           ^{:key (:id item)}
           [collection-item-card item collection-id])])]))
 

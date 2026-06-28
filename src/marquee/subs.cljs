@@ -1,6 +1,16 @@
 (ns marquee.subs
-  (:require [re-frame.core :as rf]
+  (:require [clojure.string :as str]
+            [re-frame.core :as rf]
             [martian.re-frame :as martian]))
+
+(defn- item-matches?
+  "Case-insensitive substring match of `needle` against any of an item's
+  human-readable text fields. Used for client-side media filtering."
+  [needle item]
+  (let [needle (str/lower-case needle)]
+    (boolean
+     (some (fn [v] (and v (str/includes? (str/lower-case (str v)) needle)))
+           ((juxt :name :title :description :overview :kind) item)))))
 
 (rf/reg-sub
  ::active-page
@@ -97,26 +107,42 @@
    (:media-page-size db 20)))
 
 (rf/reg-sub
- ::paginated-media-items
+ ::media-filter
  (fn [db _]
-   (let [library-id (:selected-library-id db)
-         items (get-in db [:library-items library-id])
-         page (:media-current-page db 1)
-         page-size (:media-page-size db 20)
-         start (* (dec page) page-size)
-         end (+ start page-size)]
+   (:media-filter db "")))
+
+;; The selected library's items, narrowed by the current text filter. nil while
+;; items are still loading so callers can distinguish "loading" from "no match".
+(rf/reg-sub
+ ::filtered-media-items
+ (fn [db _]
+   (let [items (get-in db [:library-items (:selected-library-id db)])
+         needle (:media-filter db "")]
      (when items
-       (subvec (vec items) start (min end (count items)))))))
+       (if (str/blank? needle)
+         (vec items)
+         (filterv #(item-matches? needle %) items))))))
+
+(rf/reg-sub
+ ::paginated-media-items
+ :<- [::filtered-media-items]
+ :<- [::media-current-page]
+ :<- [::media-page-size]
+ (fn [[items page page-size] _]
+   (when items
+     (let [n     (count items)
+           start (min (* (dec page) page-size) n)
+           end   (min (+ start page-size) n)]
+       (subvec items start end)))))
 
 (rf/reg-sub
  ::media-total-pages
- (fn [db _]
-   (let [library-id (:selected-library-id db)
-         page-size (:media-page-size db 20)
-         items (get-in db [:library-items library-id])]
-     (if items
-       (js/Math.ceil (/ (count items) page-size))
-       0))))
+ :<- [::filtered-media-items]
+ :<- [::media-page-size]
+ (fn [[items page-size] _]
+   (if items
+     (js/Math.ceil (/ (count items) page-size))
+     0)))
 
 ;; ---------------------------------------------------------------------------
 ;; Browse by metadata subscriptions
@@ -309,6 +335,24 @@
        (let [items (keep #(get-in db [:media-items %]) media-ids)]
          (when (= (count items) (count media-ids))
            items))))))
+
+(rf/reg-sub
+ ::collection-filter
+ (fn [db _]
+   (:collection-filter db "")))
+
+;; A collection's loaded items, narrowed by the current text filter. nil while
+;; items are still loading (mirrors ::collection-items).
+(rf/reg-sub
+ ::filtered-collection-items
+ (fn [[_ collection-id] _]
+   [(rf/subscribe [::collection-items collection-id])
+    (rf/subscribe [::collection-filter])])
+ (fn [[items needle] _]
+   (when items
+     (if (str/blank? needle)
+       items
+       (filterv #(item-matches? needle %) items)))))
 
 (rf/reg-sub
  ::new-collection-name
