@@ -32,6 +32,7 @@
     :selected-library-id nil
     :media-page-items nil        ; current page of the selected library's items
     :media-total nil             ; total items matching the current query (nil = unknown)
+    :media-has-more nil          ; server flag: more pages after the current one
     :media-loading? false
     :media-current-page 1
     :media-page-size 20
@@ -206,23 +207,16 @@
    (log-request-failure "Failed to load libraries:" response)
    (assoc db :media-libraries [])))
 
-;; Query-param name the backend exposes for title/name search on
+;; Query-param the backend exposes for case-insensitive title search on
 ;; /api/media/libraries/{id}/items. Martian only sends params declared in the
-;; OpenAPI spec, so this must match the backend's parameter name (change here if
-;; the backend names it differently, e.g. :search).
-(def ^:private media-search-param :q)
-
-(defn- pagination-total
-  "Best-effort total item count from a paginated response's :pagination map,
-  tolerant of which field name the backend uses. Returns nil when none is
-  present, in which case the pager falls back to a next-page heuristic."
-  [pagination]
-  (when (map? pagination)
-    (some pagination [:total :total-items :total-count :count :totalItems])))
+;; OpenAPI spec, so this must match the backend's parameter name exactly.
+(def ^:private media-search-param :search)
 
 ;; Fetch a single page of the selected library's items from the server. Paging
-;; (limit/offset) and text search (the `q` param) are both done server-side, so
-;; we only ever hold one page in memory — large libraries no longer hang the UI.
+;; (limit/offset) and title search (the `search` param) are both done
+;; server-side, so we only ever hold one page in memory — large libraries no
+;; longer hang the UI. The response's :pagination map reports kebab-case
+;; :total (count of matching items) and :has-more.
 (rf/reg-event-fx
  ::load-library-items
  (fn [{:keys [db]} [_ library-id]]
@@ -245,14 +239,15 @@
 (rf/reg-event-db
  ::load-library-items-success
  (fn [db [_ _library-id response]]
-   (let [body  (:body response)
+   (let [body       (:body response)
          ;; Extract items from the paginated response, with a fallback for the
          ;; pre-pagination (plain array) format.
-         items (vec (if (map? body) (:items body) body))
-         total (when (map? body) (pagination-total (:pagination body)))]
+         items      (vec (if (map? body) (:items body) body))
+         pagination (when (map? body) (:pagination body))]
      (-> db
          (assoc :media-page-items items)
-         (assoc :media-total total)
+         (assoc :media-total (:total pagination))
+         (assoc :media-has-more (:has-more pagination))
          (assoc :media-loading? false)))))
 
 (rf/reg-event-db
@@ -262,6 +257,7 @@
    (-> db
        (assoc :media-page-items [])
        (assoc :media-total 0)
+       (assoc :media-has-more false)
        (assoc :media-loading? false))))
 
 (rf/reg-event-fx
@@ -411,7 +407,8 @@
                   (assoc :media-current-page 1)
                   (assoc :media-filter "")
                   (assoc :media-page-items nil)
-                  (assoc :media-total nil))
+                  (assoc :media-total nil)
+                  (assoc :media-has-more nil))
     :dispatch [::load-library-items library-id]}))
 
 (rf/reg-event-fx

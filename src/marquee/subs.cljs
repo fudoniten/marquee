@@ -125,6 +125,13 @@
  (fn [db _]
    (:media-loading? db false)))
 
+;; Server's authoritative "is there a next page" flag. nil when unknown (e.g. a
+;; pre-pagination response), in which case callers fall back to a heuristic.
+(rf/reg-sub
+ ::media-has-more
+ (fn [db _]
+   (:media-has-more db)))
+
 ;; Total page count from the server-reported total. nil when the total is
 ;; unknown, so the pager can fall back to a next-page heuristic instead.
 (rf/reg-sub

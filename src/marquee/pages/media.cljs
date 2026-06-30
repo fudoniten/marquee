@@ -102,12 +102,14 @@
         current-page @(rf/subscribe [::subs/media-current-page])
         page-size @(rf/subscribe [::subs/media-page-size])
         total-pages @(rf/subscribe [::subs/media-total-pages])
+        has-more @(rf/subscribe [::subs/media-has-more])
         selected-library @(rf/subscribe [::subs/selected-library])
-        ;; When the backend reports no total, fall back to "there's a next page
-        ;; if this one came back full".
-        has-next (if total-pages
-                   (< current-page total-pages)
-                   (= (count page-items) page-size))
+        ;; Prefer the server's has-more flag; otherwise derive from the total
+        ;; page count, and as a last resort assume a full page means there's more.
+        has-next (cond
+                   (some? has-more) has-more
+                   total-pages      (< current-page total-pages)
+                   :else            (= (count page-items) page-size))
         filtering? (not (str/blank? filter-text))]
     [:div {:class "space-y-6"}
      [:div
