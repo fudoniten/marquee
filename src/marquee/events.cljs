@@ -203,26 +203,52 @@
    (log-request-failure "Failed to load libraries:" response)
    (assoc db :media-libraries [])))
 
+;; Items per request when paging through a library. The endpoint pages via
+;; limit/offset, so we walk it in chunks and accumulate every page rather than
+;; showing only the first.
+(def ^:private library-items-page-size 500)
+
+;; Safety net against a backend that ignores `offset` and keeps returning the
+;; same page forever — stop once we've walked an implausibly large library.
+(def ^:private library-items-max-offset 1000000)
+
 (rf/reg-event-fx
  ::load-library-items
  (fn [{:keys [db]} [_ library-id]]
+   ;; Leave any already-loaded items in place while we re-page so live refreshes
+   ;; don't flash a loading state; the accumulated list replaces them on the
+   ;; final page.
+   {:db db
+    :dispatch [::fetch-library-items-page library-id 0 []]}))
+
+(rf/reg-event-fx
+ ::fetch-library-items-page
+ (fn [{:keys [db]} [_ library-id offset acc]]
    {:db db
     :dispatch [::martian/request
                :get-api-media-libraries-id-items
                {::martian/instance-id :pseudovision
-                :id library-id}
-               [::load-library-items-success library-id]
+                :id     library-id
+                :limit  library-items-page-size
+                :offset offset}
+               [::load-library-items-page-success library-id offset acc]
                [::load-library-items-failure library-id]]}))
 
-(rf/reg-event-db
- ::load-library-items-success
- (fn [db [_ library-id response]]
-   (let [body (:body response)
-         ;; Extract items from paginated response
-         items (if (map? body)
-                 (:items body)  ; New paginated format
-                 body)]         ; Fallback for non-paginated (backward compat)
-     (assoc-in db [:library-items library-id] items))))
+(rf/reg-event-fx
+ ::load-library-items-page-success
+ (fn [{:keys [db]} [_ library-id offset acc response]]
+   (let [body  (:body response)
+         ;; Extract items from paginated response, with a fallback for the
+         ;; pre-pagination (plain array) format.
+         items (vec (if (map? body) (:items body) body))
+         acc'  (into acc items)
+         ;; Advance by what the server actually returned (it may cap `limit`),
+         ;; and stop once a page comes back empty.
+         next-offset (+ offset (count items))]
+     (if (and (seq items) (< next-offset library-items-max-offset))
+       {:db db
+        :dispatch [::fetch-library-items-page library-id next-offset acc']}
+       {:db (assoc-in db [:library-items library-id] acc')}))))
 
 (rf/reg-event-db
  ::load-library-items-failure
