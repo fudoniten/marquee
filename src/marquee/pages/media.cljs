@@ -64,9 +64,8 @@
            :value       value
            :on-change   #(rf/dispatch [::events/set-media-filter (.. % -target -value)])}])
 
-(defn pagination-controls [current-page total-pages]
-  (let [has-prev (> current-page 1)
-        has-next (< current-page total-pages)]
+(defn pagination-controls [current-page total-pages has-next]
+  (let [has-prev (> current-page 1)]
     [:div {:class "flex items-center justify-between border-t pt-4 mt-6"}
      [:div {:class "flex items-center gap-2"}
       [button {:size :sm
@@ -80,7 +79,10 @@
                :on-click #(rf/dispatch [::events/set-media-page (inc current-page)])}
        "Next →"]]
      [:div {:class "text-sm text-muted-foreground"}
-      (str "Page " current-page " of " total-pages)]]))
+      ;; total-pages is nil when the backend doesn't report a total.
+      (if total-pages
+        (str "Page " current-page " of " total-pages)
+        (str "Page " current-page))]]))
 
 (defn media-grid [items]
   (if (empty? items)
@@ -93,13 +95,22 @@
 (defn page []
   (let [libraries @(rf/subscribe [::subs/media-libraries])
         selected-library-id @(rf/subscribe [::subs/selected-library-id])
-        all-items @(rf/subscribe [::subs/library-items selected-library-id])
+        page-items @(rf/subscribe [::subs/media-page-items])
+        total @(rf/subscribe [::subs/media-total])
+        loading? @(rf/subscribe [::subs/media-loading?])
         filter-text @(rf/subscribe [::subs/media-filter])
-        filtered-items @(rf/subscribe [::subs/filtered-media-items])
         current-page @(rf/subscribe [::subs/media-current-page])
-        paginated-items @(rf/subscribe [::subs/paginated-media-items])
+        page-size @(rf/subscribe [::subs/media-page-size])
         total-pages @(rf/subscribe [::subs/media-total-pages])
-        selected-library @(rf/subscribe [::subs/selected-library])]
+        has-more @(rf/subscribe [::subs/media-has-more])
+        selected-library @(rf/subscribe [::subs/selected-library])
+        ;; Prefer the server's has-more flag; otherwise derive from the total
+        ;; page count, and as a last resort assume a full page means there's more.
+        has-next (cond
+                   (some? has-more) has-more
+                   total-pages      (< current-page total-pages)
+                   :else            (= (count page-items) page-size))
+        filtering? (not (str/blank? filter-text))]
     [:div {:class "space-y-6"}
      [:div
       [:h1 {:class "text-3xl font-bold tracking-tight"} "Media"]
@@ -171,32 +182,33 @@
         (when selected-library
           [:div {:class "mb-4"}
            [:h2 {:class "text-2xl font-semibold"} (:name selected-library)]
-           (when all-items
+           (when (some? total)
              [:p {:class "text-sm text-muted-foreground"}
-              (if (str/blank? filter-text)
-                (str (count all-items) " items total")
-                (str (count filtered-items) " of " (count all-items) " items match"))])])
+              (if filtering?
+                (str total " items match")
+                (str total " items total"))])])
 
-        ;; Filter box — only useful once there are items to narrow.
-        (when (seq all-items)
+        ;; Filter box — available whenever there are items to search or a filter
+        ;; is already active (so the user can edit or clear it even with 0 hits).
+        (when (and (some? page-items) (or (seq page-items) filtering?))
           [:div {:class "mb-4"}
            [filter-input filter-text]])
 
-        ;; Loading items
+        ;; Items / loading / empty states
         (cond
-          (nil? all-items)
+          (nil? page-items)
           [:p {:class "text-muted-foreground"} "Loading items..."]
 
-          (empty? all-items)
-          [:p {:class "text-muted-foreground"} "No items in this library."]
-
-          (empty? filtered-items)
+          (and (empty? page-items) filtering?)
           [:p {:class "text-muted-foreground"} "No items match your filter."]
 
-          ;; Display items
+          (empty? page-items)
+          [:p {:class "text-muted-foreground"} "No items in this library."]
+
+          ;; Display the current page of items
           :else
-          [:div
-           [media-grid paginated-items]
-           (when (> total-pages 1)
-             [pagination-controls current-page total-pages])])])]))
+          [:div {:class (when loading? "opacity-60")}
+           [media-grid page-items]
+           (when (or has-next (> current-page 1))
+             [pagination-controls current-page total-pages has-next])])])]))
 

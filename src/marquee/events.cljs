@@ -26,14 +26,18 @@
    {:active-page :home
     :counter     0
     :media-libraries nil
-    :library-items {}
     :media-items {}
     :scheduler-metadata {}
     :current-media-id nil
     :selected-library-id nil
+    :media-page-items nil        ; current page of the selected library's items
+    :media-total nil             ; total items matching the current query (nil = unknown)
+    :media-has-more nil          ; server flag: more pages after the current one
+    :media-loading? false
     :media-current-page 1
     :media-page-size 20
-    :media-filter ""             ; text filter over the selected library's items
+    :media-filter ""             ; server-side text search over the selected library
+    :media-search-token 0        ; debounce token for the filter input
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
     :browse-facet :tags          ; :tags | :dimensions
@@ -203,58 +207,58 @@
    (log-request-failure "Failed to load libraries:" response)
    (assoc db :media-libraries [])))
 
-;; Items per request when paging through a library. The endpoint pages via
-;; limit/offset, so we walk it in chunks and accumulate every page rather than
-;; showing only the first.
-(def ^:private library-items-page-size 500)
+;; Query-param the backend exposes for case-insensitive title search on
+;; /api/media/libraries/{id}/items. Martian only sends params declared in the
+;; OpenAPI spec, so this must match the backend's parameter name exactly.
+(def ^:private media-search-param :search)
 
-;; Safety net against a backend that ignores `offset` and keeps returning the
-;; same page forever — stop once we've walked an implausibly large library.
-(def ^:private library-items-max-offset 1000000)
-
+;; Fetch a single page of the selected library's items from the server. Paging
+;; (limit/offset) and title search (the `search` param) are both done
+;; server-side, so we only ever hold one page in memory — large libraries no
+;; longer hang the UI. The response's :pagination map reports kebab-case
+;; :total (count of matching items) and :has-more.
 (rf/reg-event-fx
  ::load-library-items
  (fn [{:keys [db]} [_ library-id]]
-   ;; Leave any already-loaded items in place while we re-page so live refreshes
-   ;; don't flash a loading state; the accumulated list replaces them on the
-   ;; final page.
-   {:db db
-    :dispatch [::fetch-library-items-page library-id 0 []]}))
+   (let [page      (:media-current-page db 1)
+         page-size (:media-page-size db 20)
+         needle    (:media-filter db "")
+         params    (cond-> {::martian/instance-id :pseudovision
+                            :id     library-id
+                            :limit  page-size
+                            :offset (* (dec page) page-size)}
+                     (not (clojure.string/blank? needle))
+                     (assoc media-search-param needle))]
+     {:db       (assoc db :media-loading? true)
+      :dispatch [::martian/request
+                 :get-api-media-libraries-id-items
+                 params
+                 [::load-library-items-success library-id]
+                 [::load-library-items-failure library-id]]})))
 
-(rf/reg-event-fx
- ::fetch-library-items-page
- (fn [{:keys [db]} [_ library-id offset acc]]
-   {:db db
-    :dispatch [::martian/request
-               :get-api-media-libraries-id-items
-               {::martian/instance-id :pseudovision
-                :id     library-id
-                :limit  library-items-page-size
-                :offset offset}
-               [::load-library-items-page-success library-id offset acc]
-               [::load-library-items-failure library-id]]}))
-
-(rf/reg-event-fx
- ::load-library-items-page-success
- (fn [{:keys [db]} [_ library-id offset acc response]]
-   (let [body  (:body response)
-         ;; Extract items from paginated response, with a fallback for the
+(rf/reg-event-db
+ ::load-library-items-success
+ (fn [db [_ _library-id response]]
+   (let [body       (:body response)
+         ;; Extract items from the paginated response, with a fallback for the
          ;; pre-pagination (plain array) format.
-         items (vec (if (map? body) (:items body) body))
-         acc'  (into acc items)
-         ;; Advance by what the server actually returned (it may cap `limit`),
-         ;; and stop once a page comes back empty.
-         next-offset (+ offset (count items))]
-     (if (and (seq items) (< next-offset library-items-max-offset))
-       {:db db
-        :dispatch [::fetch-library-items-page library-id next-offset acc']}
-       {:db (assoc-in db [:library-items library-id] acc')}))))
+         items      (vec (if (map? body) (:items body) body))
+         pagination (when (map? body) (:pagination body))]
+     (-> db
+         (assoc :media-page-items items)
+         (assoc :media-total (:total pagination))
+         (assoc :media-has-more (:has-more pagination))
+         (assoc :media-loading? false)))))
 
 (rf/reg-event-db
  ::load-library-items-failure
  (fn [db [_ library-id response]]
    (log-request-failure (str "Failed to load library items: " library-id) response)
-   (assoc-in db [:library-items library-id] [])))
+   (-> db
+       (assoc :media-page-items [])
+       (assoc :media-total 0)
+       (assoc :media-has-more false)
+       (assoc :media-loading? false))))
 
 (rf/reg-event-fx
  ::load-media-item
@@ -392,38 +396,59 @@
 
 ;; Library selection and pagination events
 
+;; Switching libraries resets paging/filter and fetches the first page. We clear
+;; the held page so the view shows a loading state instead of the prior
+;; library's items.
 (rf/reg-event-fx
  ::select-library
  (fn [{:keys [db]} [_ library-id]]
-   (let [already-loaded? (get-in db [:library-items library-id])]
-     (cond-> {:db (-> db
-                      (assoc :selected-library-id library-id)
-                      (assoc :media-current-page 1)
-                      (assoc :media-filter ""))}
-       (not already-loaded?)
-       (assoc :dispatch [::load-library-items library-id])))))
+   {:db       (-> db
+                  (assoc :selected-library-id library-id)
+                  (assoc :media-current-page 1)
+                  (assoc :media-filter "")
+                  (assoc :media-page-items nil)
+                  (assoc :media-total nil)
+                  (assoc :media-has-more nil))
+    :dispatch [::load-library-items library-id]}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-media-page
- (fn [db [_ page]]
-   (assoc db :media-current-page page)))
+ (fn [{:keys [db]} [_ page]]
+   ;; Only fetch when a library is selected — on first navigation the page is
+   ;; reset before any library exists, and select-library handles that load.
+   (cond-> {:db (assoc db :media-current-page page)}
+     (:selected-library-id db)
+     (assoc :dispatch [::load-library-items (:selected-library-id db)]))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-media-page-size
- (fn [db [_ size]]
-   (-> db
-       (assoc :media-page-size size)
-       (assoc :media-current-page 1))))
+ (fn [{:keys [db]} [_ size]]
+   (cond-> {:db (-> db
+                    (assoc :media-page-size size)
+                    (assoc :media-current-page 1))}
+     (:selected-library-id db)
+     (assoc :dispatch [::load-library-items (:selected-library-id db)]))))
 
-;; Filtering the loaded library items happens client-side (the whole library is
-;; already in memory), so this just stores the needle and resets to page 1 so
-;; the user always lands on the first page of matches.
-(rf/reg-event-db
+;; Filtering is server-side. We store the needle immediately (so the input stays
+;; responsive), reset to page 1, and debounce the actual request: each keystroke
+;; bumps a token and schedules a fetch that only fires if it's still the latest.
+(rf/reg-event-fx
  ::set-media-filter
- (fn [db [_ text]]
-   (-> db
-       (assoc :media-filter text)
-       (assoc :media-current-page 1))))
+ (fn [{:keys [db]} [_ text]]
+   (let [token (inc (:media-search-token db 0))]
+     {:db       (-> db
+                    (assoc :media-filter text)
+                    (assoc :media-current-page 1)
+                    (assoc :media-search-token token))
+      ::timeout {:ms 300 :dispatch [::run-media-search token]}})))
+
+(rf/reg-event-fx
+ ::run-media-search
+ (fn [{:keys [db]} [_ token]]
+   ;; Drop stale debounce timers — only the most recent keystroke fetches.
+   (when (and (= token (:media-search-token db))
+              (:selected-library-id db))
+     {:dispatch [::load-library-items (:selected-library-id db)]})))
 
 ;; ---------------------------------------------------------------------------
 ;; Browse by metadata (Tunarr Scheduler browse endpoints)

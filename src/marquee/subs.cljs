@@ -50,11 +50,6 @@
    (:media-libraries db)))
 
 (rf/reg-sub
- ::library-items
- (fn [db [_ library-id]]
-   (get-in db [:library-items library-id])))
-
-(rf/reg-sub
  ::current-media-id
  (fn [db _]
    (:current-media-id db)))
@@ -111,38 +106,41 @@
  (fn [db _]
    (:media-filter db "")))
 
-;; The selected library's items, narrowed by the current text filter. nil while
-;; items are still loading so callers can distinguish "loading" from "no match".
+;; The current page of items for the selected library, as returned by the
+;; server. nil while loading so callers can distinguish "loading" from "empty".
 (rf/reg-sub
- ::filtered-media-items
+ ::media-page-items
  (fn [db _]
-   (let [items (get-in db [:library-items (:selected-library-id db)])
-         needle (:media-filter db "")]
-     (when items
-       (if (str/blank? needle)
-         (vec items)
-         (filterv #(item-matches? needle %) items))))))
+   (:media-page-items db)))
+
+;; Total number of items matching the current query (library + filter), or nil
+;; when the backend doesn't report a total.
+(rf/reg-sub
+ ::media-total
+ (fn [db _]
+   (:media-total db)))
 
 (rf/reg-sub
- ::paginated-media-items
- :<- [::filtered-media-items]
- :<- [::media-current-page]
- :<- [::media-page-size]
- (fn [[items page page-size] _]
-   (when items
-     (let [n     (count items)
-           start (min (* (dec page) page-size) n)
-           end   (min (+ start page-size) n)]
-       (subvec items start end)))))
+ ::media-loading?
+ (fn [db _]
+   (:media-loading? db false)))
 
+;; Server's authoritative "is there a next page" flag. nil when unknown (e.g. a
+;; pre-pagination response), in which case callers fall back to a heuristic.
+(rf/reg-sub
+ ::media-has-more
+ (fn [db _]
+   (:media-has-more db)))
+
+;; Total page count from the server-reported total. nil when the total is
+;; unknown, so the pager can fall back to a next-page heuristic instead.
 (rf/reg-sub
  ::media-total-pages
- :<- [::filtered-media-items]
+ :<- [::media-total]
  :<- [::media-page-size]
- (fn [[items page-size] _]
-   (if items
-     (js/Math.ceil (/ (count items) page-size))
-     0)))
+ (fn [[total page-size] _]
+   (when (and total (pos? page-size))
+     (max 1 (js/Math.ceil (/ total page-size))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Browse by metadata subscriptions
