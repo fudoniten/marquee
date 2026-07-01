@@ -8,7 +8,8 @@
             [marquee.components.button :refer [button]]
             [marquee.components.action-button :refer [action-btn]]
             [marquee.components.copy-button :refer [copy-button]]
-            [marquee.components.card :refer [card card-content]]))
+            [marquee.components.card :refer [card card-content]]
+            [marquee.lib.utils :as utils]))
 
 ;; ---------------------------------------------------------------------------
 ;; Time helpers
@@ -46,11 +47,13 @@
 
 (defn- event-title
   "Best available label for a playout event: an explicit custom title, else the
-  referenced media item's name (resolved from the cache), else a bare id."
+  referenced media item's ancestor-qualified name (e.g. \"Episode 13 - Season 2
+  - The Show\", resolved from the cache), else a bare id."
   [{:keys [custom-title media-item-id]} media-items]
   (let [item (get media-items media-item-id)]
     (or (not-empty custom-title)
-        (when (map? item) (or (not-empty (:title item)) (not-empty (:name item))))
+        (when (map? item) (or (not-empty (utils/media-display-name item media-items))
+                              (not-empty (:title item))))
         (when media-item-id (str "Item #" media-item-id))
         "Untitled")))
 

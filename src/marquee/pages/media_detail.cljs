@@ -132,7 +132,7 @@
 
 (defn- hero-section
   "Thumbnail poster, title, badges, and Jellyfin link."
-  [{:keys [media-id media-item merged remote-key jf-link loading?]}]
+  [{:keys [media-id media-item merged remote-key jf-link loading? full-name]}]
   [:div {:class "flex gap-6 items-start"}
    (when remote-key
      [:div {:class "shrink-0 rounded-lg overflow-hidden bg-muted shadow-md" :style {:width "160px"}}
@@ -145,7 +145,7 @@
     [:h1 {:class "text-3xl font-bold tracking-tight"}
      (if loading?
        "Loading…"
-       (or (:name media-item) (str "Media Item #" media-id)))]
+       (or full-name (:name media-item) (str "Media Item #" media-id)))]
     [:div {:class "flex flex-wrap items-center gap-2 mt-2 text-muted-foreground"}
      (when-let [kind (or (:kind media-item) (and merged (field-by-name merged "type")))]
        [:span {:class "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize"}
@@ -194,6 +194,58 @@
                      :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
             (str v)])])]]))
 
+(defn- accent-chips
+  "Chips rendered in the accent hue, for attributes inherited from a parent so
+   they read as distinct from the item's own (secondary/primary) chips. Each
+   chip links into Browse for that facet/value."
+  [facet values value->selection]
+  (when (seq values)
+    [:div {:class "flex flex-wrap gap-1.5"}
+     (for [[i v] (map-indexed vector values)
+           :let [label (display-str v)]]
+       ^{:key i}
+       [:button {:class    "inline-flex items-center rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+                 :on-click #(rf/dispatch [::events/browse-select-item facet (value->selection label)])}
+        label])]))
+
+(defn- parent-attributes-section
+  "Attributes inherited from parent items (season/show). Offset with an accent
+   left border and rendered in the accent hue so they're clearly distinct from
+   the item's own tags and dimensions. Only ancestors that actually carry tags
+   or dimensions are shown; each parent name links to its own detail page."
+  [ancestors]
+  (let [shown (filter (fn [{:keys [tags categories]}]
+                        (or (seq tags) (and (map? categories) (seq categories))))
+                      ancestors)]
+    (when (seq shown)
+      [:div {:class "mt-4 border-l-2 border-accent/50 pl-3 space-y-3"}
+       [:p {:class "text-xs font-semibold uppercase tracking-wide text-accent"}
+        "Inherited from parent"]
+       (for [{:keys [id item tags categories]} shown]
+         ^{:key id}
+         [:div {:class "space-y-2"}
+          [:p {:class "text-sm font-medium"}
+           [:button {:class    "underline-offset-2 hover:text-primary hover:underline cursor-pointer"
+                     :on-click #(rf/dispatch [::events/navigate-to-media-detail id])}
+            (or (:name item) (str "#" id))]
+           (when-let [kind (:kind item)]
+             [:span {:class "ml-2 text-xs text-muted-foreground capitalize"}
+              (display-str kind)])]
+          (when (seq tags)
+            [:div
+             [:p {:class "text-xs text-muted-foreground mb-1"} "Tags"]
+             [accent-chips :tags tags identity]])
+          (when (and (map? categories) (seq categories))
+            [:div
+             [:p {:class "text-xs text-muted-foreground mb-1"} "Dimensions"]
+             [:div {:class "space-y-1.5"}
+              (for [[dim values] categories]
+                ^{:key dim}
+                [:div {:class "flex flex-wrap items-center gap-1.5"}
+                 [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
+                  (str (humanize dim) ":")]
+                 [accent-chips :dimensions values #(str dim ":" %)]])]])])])))
+
 (def ^:private known-fields
   #{"name" "kind" "type" "year" "release-date" "content-rating" "premiere"
     "state" "id" "remote-key" "plot" "description" "tags" "genres"
@@ -236,7 +288,7 @@
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key loading? numeric-id categories]}]
+  [{:keys [merged remote-key loading? numeric-id categories ancestors]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -261,6 +313,7 @@
           (or (field-by-name merged "tags") (:tags merged))]]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
        [dimension-chips categories]
+       [parent-attributes-section ancestors]
        [remaining-fields merged known-fields]])]])
 
 ;;; ── Add to Collection ───────────────────────────────────────────────────
@@ -347,6 +400,8 @@
         media-item         @(rf/subscribe [::subs/media-item media-id])
         scheduler-metadata @(rf/subscribe [::subs/scheduler-metadata media-id])
         categories         @(rf/subscribe [::subs/media-categories media-id])
+        ancestors          @(rf/subscribe [::subs/media-ancestors media-id])
+        full-name          @(rf/subscribe [::subs/media-full-name media-id])
         jellyfin-url       @(rf/subscribe [::subs/jellyfin-url])
         loading?           (nil? media-item)
         not-found?         (false? media-item)
@@ -359,7 +414,9 @@
                             :remote-key remote-key :jf-link jf-link
                             :jellyfin-url jellyfin-url :loading? loading?
                             :numeric-id numeric-id
-                            :categories categories}]
+                            :categories categories
+                            :ancestors ancestors
+                            :full-name full-name}]
     [:div {:class "space-y-6"}
      [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost

@@ -1,7 +1,8 @@
 (ns marquee.subs
   (:require [clojure.string :as str]
             [re-frame.core :as rf]
-            [martian.re-frame :as martian]))
+            [martian.re-frame :as martian]
+            [marquee.lib.utils :as utils]))
 
 (defn- item-matches?
   "Case-insensitive substring match of `needle` against any of an item's
@@ -65,6 +66,36 @@
  ::scheduler-metadata
  (fn [db [_ media-id]]
    (get-in db [:scheduler-metadata media-id])))
+
+;; The chain of a media item's ancestors — immediate parent first, up to the
+;; root — each paired with its loaded item, tags, and scheduler categories, so
+;; the detail page can surface attributes inherited from parents (e.g. a show's
+;; tags on an episode). Ancestors are cached under their Pseudovision id,
+;; matching how ::load-media-ancestors stores them.
+(rf/reg-sub
+ ::media-ancestors
+ (fn [db [_ media-id]]
+   (let [items (:media-items db)]
+     (loop [pid  (:parent-id (get items media-id))
+            seen #{}
+            acc  []]
+       (let [parent (get items pid)]
+         (if (and pid parent (not (contains? seen pid)))
+           (recur (:parent-id parent)
+                  (conj seen pid)
+                  (conj acc {:id         pid
+                             :item       parent
+                             :tags       (get-in db [:media-tags (:id parent)] [])
+                             :categories (get-in db [:media-categories pid])}))
+           acc))))))
+
+;; A media item's descriptive, ancestor-qualified name (e.g.
+;; "Episode 13 - Season 2 - The Show"), resolved against the media-items cache.
+(rf/reg-sub
+ ::media-full-name
+ (fn [db [_ media-id]]
+   (let [items (:media-items db)]
+     (utils/media-display-name (get items media-id) items))))
 
 (rf/reg-sub
  ::media-tags
