@@ -28,8 +28,8 @@
 
 (defn navbar []
   (let [active @(rf/subscribe [::subs/active-page])]
-    [:nav {:class "flex items-center gap-1 border-b pb-4"}
-     [:span {:class "mr-4 font-semibold"} "Marquee"]
+    [:nav {:class "flex flex-wrap items-center gap-1 border-b border-border pb-4"}
+     [:span {:class "mr-4 font-semibold text-primary tracking-tight"} "Marquee"]
      (for [[page {:keys [label show-in-nav]}] pages
            :when show-in-nav]
        ^{:key page}
@@ -47,12 +47,13 @@
 (defn app []
   (let [active  @(rf/subscribe [::subs/active-page])
         ready?  @(rf/subscribe [::subs/api-ready?])
-        view    (get-in pages [active :view])
-        ;; Guide and API docs benefit from more horizontal room.
-        width   (if (#{:api-docs :schedule-grid} active) "max-w-5xl" "max-w-2xl")]
+        view    (get-in pages [active :view])]
     (if-not ready?
       [loading]
-      [:div {:class (str "container mx-auto py-10 " width)}
+      ;; A single, consistent wide container for every tab so nothing jumps
+      ;; around when switching pages. Responsive padding keeps it usable on
+      ;; phones while filling a desktop window.
+      [:div {:class "mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-8"}
        [navbar]
        [:main {:class "py-8"}
         [view]]])))

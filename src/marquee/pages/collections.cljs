@@ -34,7 +34,7 @@
     [card-description {} (str (count items) " item" (when (not= 1 (count items)) "s"))]]])
 
 (defn- collection-item-card [{:keys [id name title description kind duration remote-key]} collection-id]
-  [card {:class "mb-4 overflow-hidden"}
+  [card {:class "flex flex-col overflow-hidden"}
    (when remote-key
      [:div {:class "w-full bg-muted flex items-center justify-center overflow-hidden" :style {:max-height "160px"}}
       [:img {:src     (jellyfin-image-url remote-key)
@@ -44,12 +44,12 @@
              :loading "lazy"
              :on-error #(-> % .-target .-parentElement .-style (aset "display" "none"))}]])
    [card-header {}
-    [card-title {} (or title name (str "Item #" id))]
+    [card-title {:class "text-lg"} (or title name (str "Item #" id))]
     (when kind
       [card-description {} (str "Type: " kind)])]
-   [card-content {}
+   [card-content {:class "flex-1"}
     (when description
-      [:p {:class "text-sm text-muted-foreground mb-2"} description])
+      [:p {:class "text-sm text-muted-foreground mb-2 line-clamp-3"} description])
     (when duration
       [:p {:class "text-xs text-muted-foreground"}
        (str "Duration: " (js/Math.floor (/ duration 60)) " min")])]
@@ -112,7 +112,7 @@
        [:p {:class "text-muted-foreground"} "No items match your filter."]
 
        :else
-       [:div {:class "grid gap-4"}
+       [:div {:class "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"}
         (for [item filtered]
           ^{:key (:id item)}
           [collection-item-card item collection-id])])]))
@@ -129,7 +129,7 @@
 
      (if (empty? collections)
        [:p {:class "text-muted-foreground"} "No collections yet. Create one above."]
-       [:div {:class "grid gap-4"}
+       [:div {:class "grid gap-4 sm:grid-cols-2 lg:grid-cols-3"}
         (for [coll (sort-by :created-at > collections)]
           ^{:key (:id coll)}
           [collection-card coll])])]))
