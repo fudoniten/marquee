@@ -277,19 +277,60 @@
    (let [item       (:body response)
          numeric-id (:id item)
          remote-key (:remote-key item)
-         db         (assoc-in db [:media-items media-id] item)]
-     ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
-     (if remote-key
-       {:db db :dispatch-n [[::load-scheduler-metadata media-id remote-key]
-                            [::load-media-tags numeric-id]]}
-       {:db (assoc-in db [:scheduler-metadata media-id] false)
-        :dispatch [::load-media-tags numeric-id]}))))
+         parent-id  (:parent-id item)
+         ;; Only walk the parent chain for the item currently open on the detail
+         ;; page. Shared loaders (collections, guide) also hit this handler and
+         ;; have no need for inherited attributes.
+         ancestors? (= media-id (:current-media-id db))
+         ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
+         dispatches (cond-> [[::load-media-tags numeric-id]]
+                      remote-key                 (conj [::load-scheduler-metadata media-id remote-key])
+                      (and ancestors? parent-id) (conj [::load-media-ancestors parent-id]))]
+     {:db (cond-> (assoc-in db [:media-items media-id] item)
+            (not remote-key) (assoc-in [:scheduler-metadata media-id] false))
+      :dispatch-n dispatches})))
 
 (rf/reg-event-db
  ::load-media-item-failure
  (fn [db [_ media-id response]]
    (log-request-failure (str "Failed to load media item: " media-id) response)
    (assoc-in db [:media-items media-id] false)))
+
+;; Walk an item's parent chain (episode → season → show), loading each ancestor
+;; along with its tags and scheduler categories so the detail page can surface
+;; attributes inherited from parents (e.g. a show's tags on a "special episode").
+;; Ancestors are cached under their Pseudovision id; already-loaded parents are
+;; skipped so navigating between siblings doesn't refetch the shared chain.
+(rf/reg-event-fx
+ ::load-media-ancestors
+ (fn [{:keys [db]} [_ parent-id]]
+   (if (or (nil? parent-id) (contains? (:media-items db) parent-id))
+     {:db db}
+     {:db db
+      :dispatch [::martian/request
+                 :get-api-media-items-id
+                 {::martian/instance-id :pseudovision
+                  :id parent-id}
+                 [::load-media-ancestors-success parent-id]
+                 [::load-media-ancestors-failure parent-id]]})))
+
+(rf/reg-event-fx
+ ::load-media-ancestors-success
+ (fn [{:keys [db]} [_ parent-id response]]
+   (let [item        (:body response)
+         numeric-id  (:id item)
+         remote-key  (:remote-key item)
+         next-parent (:parent-id item)]
+     {:db (assoc-in db [:media-items parent-id] item)
+      :dispatch-n (cond-> [[::load-media-tags numeric-id]]
+                    remote-key  (conj [::load-scheduler-metadata parent-id remote-key])
+                    next-parent (conj [::load-media-ancestors next-parent]))})))
+
+(rf/reg-event-db
+ ::load-media-ancestors-failure
+ (fn [db [_ parent-id response]]
+   (log-request-failure (str "Failed to load parent media item: " parent-id) response)
+   db))
 
 ;; Lightweight loader used to resolve a media item's name for display (e.g. the
 ;; schedule/guide). Unlike ::load-media-item it does not fetch scheduler
@@ -309,12 +350,18 @@
                  [::ensure-media-item-success media-id]
                  [::ensure-media-item-failure media-id]]})))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::ensure-media-item-success
- (fn [db [_ media-id response]]
-   (-> db
-       (assoc-in [:media-items media-id] (:body response))
-       (update :media-items-loading disj media-id))))
+ (fn [{:keys [db]} [_ media-id response]]
+   (let [item      (:body response)
+         parent-id (:parent-id item)]
+     ;; Pull in the parent chain too so callers (e.g. the guide) can render a
+     ;; descriptive "Episode - Season - Show" name. ensure-media-item dedupes,
+     ;; so shared ancestors are fetched once.
+     {:db (-> db
+              (assoc-in [:media-items media-id] item)
+              (update :media-items-loading disj media-id))
+      :dispatch-n (when parent-id [[::ensure-media-item parent-id]])})))
 
 (rf/reg-event-db
  ::ensure-media-item-failure
