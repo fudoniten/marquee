@@ -18,7 +18,9 @@
                            (str " (" error-text ")")))
                     (pr-str body)))
 
-(def ^:private grid-window-ms (* 2 60 60 1000))
+;; Keep in sync with marquee.pages.schedule/grid-window-ms (the guide's visible
+;; window); the Back/Forward controls step by exactly one window.
+(def ^:private grid-window-ms (* 3 60 60 1000))
 
 (rf/reg-event-db
  ::initialize-db

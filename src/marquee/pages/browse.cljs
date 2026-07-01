@@ -194,7 +194,7 @@
        (empty? items) [:p {:class "text-muted-foreground"} "No media found."]
        :else
        [:div
-        [:div {:class "grid gap-4"}
+        [:div {:class "grid gap-4 sm:grid-cols-2 lg:grid-cols-3"}
          (for [item visible]
            ^{:key (or (:id item) (:name item))}
            [media-result-card item facet selection])]
