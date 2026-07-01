@@ -26,7 +26,6 @@
  ::initialize-db
  (fn [_ _]
    {:active-page :home
-    :counter     0
     :media-libraries nil
     :media-items {}
     :scheduler-metadata {}
@@ -103,6 +102,8 @@
  ::navigate
  (fn [{:keys [db]} [_ page]]
    (let [dispatches (concat
+                     (when (= page :home)
+                       [[::load-channels] [::load-jobs]])
                      (when (= page :media)
                        [[::load-media-libraries] [::set-media-page 1]])
                      (when (= page :browse)
@@ -139,6 +140,8 @@
    (let [{:keys [page media-id channel-id collection-id facet selection]}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
+                     (when (= page :home)
+                       [[::load-channels] [::load-jobs]])
                      (when (= page :media)
                        [[::load-media-libraries] [::set-media-page 1]])
                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
@@ -171,11 +174,6 @@
                     (= page :channel-schedule)  (assoc :current-channel-id channel-id)
                     (= page :collection-detail) (assoc :current-collection-id collection-id))}
        (seq dispatches) (assoc :dispatch-n dispatches)))))
-
-(rf/reg-event-db
- ::inc-counter
- (fn [db _]
-   (update db :counter inc)))
 
 ;; Media events
 

@@ -4,7 +4,6 @@
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
             [marquee.pages.home :as home]
-            [marquee.pages.about :as about]
             [marquee.pages.media :as media]
             [marquee.pages.media-detail :as media-detail]
             [marquee.pages.browse :as browse]
@@ -15,7 +14,6 @@
 
 (def pages
   {:home             {:label "Home"     :view home/page          :show-in-nav true}
-   :about            {:label "About"    :view about/page         :show-in-nav true}
    :media            {:label "Media"    :view media/page         :show-in-nav true}
    :browse           {:label "Browse"   :view browse/page        :show-in-nav true}
    :api-docs         {:label "API Docs" :view api-docs/page      :show-in-nav true}
