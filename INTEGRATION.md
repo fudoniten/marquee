@@ -135,6 +135,17 @@ Open http://localhost:8080 in your browser and click the "Media" tab.
 
 #### Media Items
 - `GET /api/media/items/{id}` - Get media item details
+- `GET /api/media/items/{id}/children` - List an item's direct children
+  (show → seasons, season → episodes). **Optional / not yet implemented
+  upstream:** the media detail page requests it to show a children list, but
+  degrades gracefully (the section stays hidden) when the endpoint 404s.
+  - Query params: `limit` (the UI sends 50 — enforce a server-side max),
+    `offset`, optional `search`.
+  - Response mirrors the library-items envelope:
+    `{"items": [...], "pagination": {"total": N, "has-more": bool,
+    "limit": N, "offset": N}}`, with `total` reporting the full child count so
+    the UI can say "showing 50 of N". Children should be ordered by
+    season/episode index (falling back to name).
 
 ### Tunarr Scheduler
 

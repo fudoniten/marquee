@@ -102,6 +102,13 @@
  (fn [db [_ numeric-id]]
    (get-in db [:media-tags numeric-id] [])))
 
+;; A media item's direct children (a capped page), or false when the backend
+;; doesn't expose the children endpoint. nil while still loading.
+(rf/reg-sub
+ ::media-children
+ (fn [db [_ media-id]]
+   (get-in db [:media-children media-id])))
+
 ;; Library selection and pagination subscriptions
 
 (rf/reg-sub

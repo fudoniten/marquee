@@ -28,6 +28,7 @@
    {:active-page :home
     :media-libraries nil
     :media-items {}
+    :media-children {}           ; media-id → {:items :total :has-more} | false
     :scheduler-metadata {}
     :current-media-id nil
     :selected-library-id nil
@@ -212,37 +213,48 @@
 ;; OpenAPI spec, so this must match the backend's parameter name exactly.
 (def ^:private media-search-param :search)
 
+;; BFF URL for a library's items, with pagination + search as an explicit query
+;; string. The path mirrors the martian operation
+;; `get-api-media-libraries-id-items` (i.e. Pseudovision's
+;; /api/media/libraries/{id}/items) behind the BFF's /api/pseudovision prefix.
+(defn- library-items-url [library-id {:keys [limit offset search]}]
+  (str "/api/pseudovision/api/media/libraries/" library-id "/items"
+       "?limit=" limit "&offset=" offset
+       (when-not (clojure.string/blank? search)
+         (str "&" (name media-search-param) "=" (js/encodeURIComponent search)))))
+
 ;; Fetch a single page of the selected library's items from the server. Paging
 ;; (limit/offset) and title search (the `search` param) are both done
 ;; server-side, so we only ever hold one page in memory — large libraries no
 ;; longer hang the UI. The response's :pagination map reports kebab-case
 ;; :total (count of matching items) and :has-more.
+;;
+;; This goes straight to the BFF rather than through martian: martian coerces
+;; query params against the operation's OpenAPI :query-schema and DROPS any it
+;; doesn't declare, so if the spec omits limit/offset the pager silently
+;; refetches offset 0 forever ("Next" repeats page 1). A plain fetch guarantees
+;; the params reach the backend, which forwards the query string verbatim.
 (rf/reg-event-fx
  ::load-library-items
  (fn [{:keys [db]} [_ library-id]]
    (let [page      (:media-current-page db 1)
          page-size (:media-page-size db 20)
-         needle    (:media-filter db "")
-         params    (cond-> {::martian/instance-id :pseudovision
-                            :id     library-id
-                            :limit  page-size
-                            :offset (* (dec page) page-size)}
-                     (not (clojure.string/blank? needle))
-                     (assoc media-search-param needle))]
-     {:db       (assoc db :media-loading? true)
-      :dispatch [::martian/request
-                 :get-api-media-libraries-id-items
-                 params
-                 [::load-library-items-success library-id]
-                 [::load-library-items-failure library-id]]})))
+         needle    (:media-filter db "")]
+     {:db          (assoc db :media-loading? true)
+      ::fetch-json {:url         (library-items-url library-id
+                                                    {:limit  page-size
+                                                     :offset (* (dec page) page-size)
+                                                     :search needle})
+                    :keywordize? true
+                    :on-success  [::load-library-items-success library-id]
+                    :on-failure  [::load-library-items-failure library-id]}})))
 
 (rf/reg-event-db
  ::load-library-items-success
- (fn [db [_ _library-id response]]
-   (let [body       (:body response)
-         ;; Extract items from the paginated response, with a fallback for the
-         ;; pre-pagination (plain array) format.
-         items      (vec (if (map? body) (:items body) body))
+ ;; `body` is the parsed JSON (keywordized): the paginated envelope, with a
+ ;; fallback for the pre-pagination (plain array) format.
+ (fn [db [_ _library-id body]]
+   (let [items      (vec (if (map? body) (:items body) body))
          pagination (when (map? body) (:pagination body))]
      (-> db
          (assoc :media-page-items items)
@@ -252,8 +264,8 @@
 
 (rf/reg-event-db
  ::load-library-items-failure
- (fn [db [_ library-id response]]
-   (log-request-failure (str "Failed to load library items: " library-id) response)
+ (fn [db [_ library-id error]]
+   (js/console.error "Failed to load library items:" library-id error)
    (-> db
        (assoc :media-page-items [])
        (assoc :media-total 0)
@@ -278,14 +290,15 @@
          numeric-id (:id item)
          remote-key (:remote-key item)
          parent-id  (:parent-id item)
-         ;; Only walk the parent chain for the item currently open on the detail
-         ;; page. Shared loaders (collections, guide) also hit this handler and
-         ;; have no need for inherited attributes.
-         ancestors? (= media-id (:current-media-id db))
+         ;; Inherited attributes and the children list are only needed for the
+         ;; item currently open on the detail page. Shared loaders (collections,
+         ;; guide) also hit this handler and don't want the extra requests.
+         detail?    (= media-id (:current-media-id db))
          ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
          dispatches (cond-> [[::load-media-tags numeric-id]]
-                      remote-key                 (conj [::load-scheduler-metadata media-id remote-key])
-                      (and ancestors? parent-id) (conj [::load-media-ancestors parent-id]))]
+                      remote-key              (conj [::load-scheduler-metadata media-id remote-key])
+                      (and detail? parent-id) (conj [::load-media-ancestors parent-id])
+                      detail?                 (conj [::load-media-children media-id]))]
      {:db (cond-> (assoc-in db [:media-items media-id] item)
             (not remote-key) (assoc-in [:scheduler-metadata media-id] false))
       :dispatch-n dispatches})))
@@ -331,6 +344,50 @@
  (fn [db [_ parent-id response]]
    (log-request-failure (str "Failed to load parent media item: " parent-id) response)
    db))
+
+;; Direct children of a media item (show → seasons, season → episodes). Capped
+;; at one page so shows / YouTube channels with thousands of children aren't
+;; pulled in wholesale; the response's :pagination reports the true :total so
+;; the detail page can note how many more exist. Requires the Pseudovision
+;; endpoint GET /api/media/items/{id}/children — until that ships the request
+;; 404s and the children section stays hidden.
+(def ^:private media-children-limit 50)
+
+(rf/reg-event-fx
+ ::load-media-children
+ (fn [{:keys [db]} [_ media-id]]
+   {:db db
+    :dispatch [::martian/request
+               :get-api-media-items-id-children
+               {::martian/instance-id :pseudovision
+                :id     media-id
+                :limit  media-children-limit
+                :offset 0}
+               [::load-media-children-success media-id]
+               [::load-media-children-failure media-id]]}))
+
+(rf/reg-event-db
+ ::load-media-children-success
+ (fn [db [_ media-id response]]
+   (let [body       (:body response)
+         ;; Same paginated envelope as /libraries/{id}/items, with a fallback
+         ;; for a bare-array response.
+         items      (vec (if (map? body) (:items body) body))
+         pagination (when (map? body) (:pagination body))]
+     (assoc-in db [:media-children media-id]
+               {:items    items
+                :total    (:total pagination)
+                :has-more (:has-more pagination)
+                :limit    media-children-limit}))))
+
+(rf/reg-event-db
+ ::load-media-children-failure
+ (fn [db [_ media-id response]]
+   ;; The children endpoint is optional; a 404 just means this Pseudovision
+   ;; build doesn't expose it yet, so keep this quiet rather than error-logging.
+   (js/console.debug "No children available for media item" media-id
+                     (str "(status " (:status response) ")"))
+   (assoc-in db [:media-children media-id] false)))
 
 ;; Lightweight loader used to resolve a media item's name for display (e.g. the
 ;; schedule/guide). Unlike ::load-media-item it does not fetch scheduler
@@ -691,16 +748,18 @@
 
 ;; API documentation browser events
 
-;; Plain fetch of an OpenAPI spec from the BFF as a JSON map (string keys).
+;; Plain fetch of JSON from the BFF. Defaults to string keys (used for the
+;; OpenAPI specs and /api/config); pass :keywordize? true to get kebab-case
+;; keyword keys, e.g. for proxied data endpoints consumed like martian results.
 (rf/reg-fx
  ::fetch-json
- (fn [{:keys [url on-success on-failure]}]
+ (fn [{:keys [url on-success on-failure keywordize?]}]
    (-> (js/fetch url)
        (.then (fn [resp]
                 (if (.-ok resp)
                   (.json resp)
                   (throw (js/Error. (str "HTTP " (.-status resp) " " (.-statusText resp)))))))
-       (.then (fn [data] (rf/dispatch (conj on-success (js->clj data)))))
+       (.then (fn [data] (rf/dispatch (conj on-success (js->clj data :keywordize-keys (boolean keywordize?))))))
        (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
 
 (rf/reg-event-fx
