@@ -78,7 +78,7 @@ or a shell script to set these variables.
 - `src/marquee/{events,subs,views}.cljs` — re-frame state + tiny page router.
 - `src/marquee/api.cljs` — martian-re-frame service bootstrap for OpenAPI integration.
 - `src/marquee/pages/` — page components:
-  - `home.cljs`, `about.cljs` — example pages.
+  - `home.cljs` — landing page: Now Playing, active jobs, and quick links.
   - `media.cljs` — displays media from Pseudovision libraries.
   - `media_detail.cljs` — shows metadata from both Pseudovision and Tunarr Scheduler.
   - `api_docs.cljs` — browsable OpenAPI documentation for every configured

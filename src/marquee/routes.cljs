@@ -2,7 +2,6 @@
 
 (def page->path
   {:home              "/"
-   :about             "/about"
    :media             "/media"
    :browse            "/browse"
    :api-docs          "/api-docs"
@@ -28,7 +27,6 @@
 (defn parse-path [path]
   (case path
     "/"          {:page :home}
-    "/about"     {:page :about}
     "/media"     {:page :media}
      "/browse"    {:page :browse :facet :tags}
      "/browse/tags"       {:page :browse :facet :tags}

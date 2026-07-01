@@ -163,19 +163,18 @@
        "View in Jellyfin ↗"])]])
 
 (defn- parent-field-row
-  "Field row for the parent ID, rendered as a Jellyfin link when possible."
-  [parent-id jellyfin-url]
+  "Field row for the parent item (episode → season → show). `parent-id` is a
+   Pseudovision id, so this links to the parent's Marquee detail page rather
+   than Jellyfin (the Jellyfin id doesn't exist for a PV id). From the parent's
+   own page you can then follow its Jellyfin link."
+  [parent-id]
   (when-not (blank-value? parent-id)
     [:div {:class "py-2 grid grid-cols-3 gap-4 border-b border-border/50"}
      [:dt {:class "text-sm font-medium text-muted-foreground"} "Parent"]
      [:dd {:class "text-sm col-span-2"}
-      (if-let [url (jellyfin-item-url jellyfin-url parent-id)]
-        [:a {:href   url
-             :target "_blank"
-             :rel    "noopener noreferrer"
-             :class  "underline underline-offset-2 hover:text-primary"}
-         (str parent-id)]
-        [:span (str parent-id)])]]))
+      [:button {:class    "underline underline-offset-2 hover:text-primary cursor-pointer"
+                :on-click #(rf/dispatch [::events/navigate-to-media-detail parent-id])}
+       (str parent-id)]]]))
 
 (defn- dimension-chips
   "Render dimension categories as clickable chips."
@@ -237,7 +236,7 @@
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key jellyfin-url loading? numeric-id categories]}]
+  [{:keys [merged remote-key loading? numeric-id categories]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -255,7 +254,7 @@
         [field-row "State"          (:state merged)]
         [field-row "Pseudovision ID" (:id merged)]
         [field-row "Jellyfin ID"    remote-key]
-        [parent-field-row (:parent-id merged) jellyfin-url]]
+        [parent-field-row (:parent-id merged)]]
         [:div {:class "py-2"}
          [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Tags"]
          [tag-editor numeric-id
