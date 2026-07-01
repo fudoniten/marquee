@@ -316,6 +316,43 @@
        [parent-attributes-section ancestors]
        [remaining-fields merged known-fields]])]])
 
+;;; ── Children ──────────────────────────────────────────────────────────────
+
+(defn- children-heading
+  "Label for a children list, derived from the children's kind (e.g. seasons of
+   a show, episodes of a season). Falls back to a generic label."
+  [items]
+  (if-let [kind (some :kind items)]
+    (str (str/capitalize (key-name kind)) "s")
+    "Children"))
+
+(defn- children-section
+  "Links to a media item's direct children (show → seasons, season → episodes).
+   Only a capped page is loaded, so when more exist we say so rather than imply
+   the list is complete. Renders nothing when there are no children or the
+   backend doesn't expose the children endpoint."
+  [children]
+  (when (and (map? children) (seq (:items children)))
+    (let [{:keys [items total]} children
+          shown (count items)
+          more? (and total (> total shown))]
+      [card {}
+       [card-content {:class "pt-6"}
+        [:div {:class "flex items-baseline justify-between mb-3"}
+         [:h2 {:class "text-sm font-semibold uppercase tracking-wide text-muted-foreground"}
+          (children-heading items)]
+         [:span {:class "text-xs text-muted-foreground"}
+          (if more? (str "Showing " shown " of " total) (str shown))]]
+        [:div {:class "grid gap-1.5 sm:grid-cols-2"}
+         (for [{:keys [id name]} items]
+           ^{:key id}
+           [:button {:class    "flex items-center rounded-md border border-border/50 px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                     :on-click #(rf/dispatch [::events/navigate-to-media-detail id])}
+            [:span {:class "truncate"} (or name (str "#" id))]])]
+        (when more?
+          [:p {:class "mt-3 text-xs text-muted-foreground"}
+           (str total " children in total — showing the first " shown ".")])]])))
+
 ;;; ── Add to Collection ───────────────────────────────────────────────────
 
 (defn- add-to-collection-dropdown [media-id]
@@ -401,6 +438,7 @@
         scheduler-metadata @(rf/subscribe [::subs/scheduler-metadata media-id])
         categories         @(rf/subscribe [::subs/media-categories media-id])
         ancestors          @(rf/subscribe [::subs/media-ancestors media-id])
+        children           @(rf/subscribe [::subs/media-children media-id])
         full-name          @(rf/subscribe [::subs/media-full-name media-id])
         jellyfin-url       @(rf/subscribe [::subs/jellyfin-url])
         loading?           (nil? media-item)
@@ -435,4 +473,5 @@
        [:<>
         [hero-section ctx]
         [detail-card ctx]
+        [children-section children]
         [curation-card media-id]])]))

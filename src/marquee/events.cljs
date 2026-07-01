@@ -28,6 +28,7 @@
    {:active-page :home
     :media-libraries nil
     :media-items {}
+    :media-children {}           ; media-id → {:items :total :has-more} | false
     :scheduler-metadata {}
     :current-media-id nil
     :selected-library-id nil
@@ -278,14 +279,15 @@
          numeric-id (:id item)
          remote-key (:remote-key item)
          parent-id  (:parent-id item)
-         ;; Only walk the parent chain for the item currently open on the detail
-         ;; page. Shared loaders (collections, guide) also hit this handler and
-         ;; have no need for inherited attributes.
-         ancestors? (= media-id (:current-media-id db))
+         ;; Inherited attributes and the children list are only needed for the
+         ;; item currently open on the detail page. Shared loaders (collections,
+         ;; guide) also hit this handler and don't want the extra requests.
+         detail?    (= media-id (:current-media-id db))
          ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
          dispatches (cond-> [[::load-media-tags numeric-id]]
-                      remote-key                 (conj [::load-scheduler-metadata media-id remote-key])
-                      (and ancestors? parent-id) (conj [::load-media-ancestors parent-id]))]
+                      remote-key              (conj [::load-scheduler-metadata media-id remote-key])
+                      (and detail? parent-id) (conj [::load-media-ancestors parent-id])
+                      detail?                 (conj [::load-media-children media-id]))]
      {:db (cond-> (assoc-in db [:media-items media-id] item)
             (not remote-key) (assoc-in [:scheduler-metadata media-id] false))
       :dispatch-n dispatches})))
@@ -331,6 +333,50 @@
  (fn [db [_ parent-id response]]
    (log-request-failure (str "Failed to load parent media item: " parent-id) response)
    db))
+
+;; Direct children of a media item (show → seasons, season → episodes). Capped
+;; at one page so shows / YouTube channels with thousands of children aren't
+;; pulled in wholesale; the response's :pagination reports the true :total so
+;; the detail page can note how many more exist. Requires the Pseudovision
+;; endpoint GET /api/media/items/{id}/children — until that ships the request
+;; 404s and the children section stays hidden.
+(def ^:private media-children-limit 50)
+
+(rf/reg-event-fx
+ ::load-media-children
+ (fn [{:keys [db]} [_ media-id]]
+   {:db db
+    :dispatch [::martian/request
+               :get-api-media-items-id-children
+               {::martian/instance-id :pseudovision
+                :id     media-id
+                :limit  media-children-limit
+                :offset 0}
+               [::load-media-children-success media-id]
+               [::load-media-children-failure media-id]]}))
+
+(rf/reg-event-db
+ ::load-media-children-success
+ (fn [db [_ media-id response]]
+   (let [body       (:body response)
+         ;; Same paginated envelope as /libraries/{id}/items, with a fallback
+         ;; for a bare-array response.
+         items      (vec (if (map? body) (:items body) body))
+         pagination (when (map? body) (:pagination body))]
+     (assoc-in db [:media-children media-id]
+               {:items    items
+                :total    (:total pagination)
+                :has-more (:has-more pagination)
+                :limit    media-children-limit}))))
+
+(rf/reg-event-db
+ ::load-media-children-failure
+ (fn [db [_ media-id response]]
+   ;; The children endpoint is optional; a 404 just means this Pseudovision
+   ;; build doesn't expose it yet, so keep this quiet rather than error-logging.
+   (js/console.debug "No children available for media item" media-id
+                     (str "(status " (:status response) ")"))
+   (assoc-in db [:media-children media-id] false)))
 
 ;; Lightweight loader used to resolve a media item's name for display (e.g. the
 ;; schedule/guide). Unlike ::load-media-item it does not fetch scheduler
