@@ -341,6 +341,58 @@
       [:p {:class "text-xs text-muted-foreground mt-0.5"}
        (str (format-date-time start-ms) " · " (duration-str start-ms end-ms))]]]))
 
+;; ── FFmpeg profile selector ──────────────────────────────────────────────────
+;; These three helpers isolate the assumed profile/channel data shape (see the
+;; events ns for the assumed API contract). Adjust here if the real API differs.
+
+(defn- profile-value
+  "The value used to identify a profile in the <select> and in the set request."
+  [p]
+  (or (:id p) (:name p)))
+
+(defn- profile-label [p]
+  (or (:name p) (:label p) (str (profile-value p))))
+
+(defn- channel-ffmpeg-profile-id
+  "A channel's currently-assigned profile id, read off the channel object.
+   ASSUMED field name — adjust if the API exposes it differently."
+  [channel]
+  (or (:ffmpeg-profile-id channel) (:ffmpeg-profile channel)))
+
+(defn- ffmpeg-profile-selector
+  "Dropdown to switch a channel's transcoding profile. Renders only when the
+   profiles endpoint returned some profiles, so it stays hidden if the backend
+   doesn't expose it."
+  [channel]
+  (let [profiles @(rf/subscribe [::subs/ffmpeg-profiles])]
+    (when (and (:id channel) (sequential? profiles) (seq profiles))
+      (let [state   @(rf/subscribe [::subs/action-state [:set-ffmpeg-profile (:id channel)]])
+            current (channel-ffmpeg-profile-id channel)
+            saving? (= :loading (:status state))]
+        [:div {:class "flex items-center gap-2"}
+         [:label {:class "text-sm text-muted-foreground"} "Profile:"]
+         [:select {:class     "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                   :value     (str (or current ""))
+                   :disabled  saving?
+                   :on-change (fn [e]
+                                (let [v (.. e -target -value)
+                                      ;; Send the profile's original-typed id, not
+                                      ;; the stringified <option> value.
+                                      chosen (some #(when (= (str (profile-value %)) v) %) profiles)]
+                                  (when chosen
+                                    (rf/dispatch [::events/set-channel-ffmpeg-profile
+                                                  (:id channel) (profile-value chosen)]))))}
+          (when (nil? current)
+            [:option {:value "" :disabled true} "Select profile…"])
+          (for [p profiles]
+            ^{:key (profile-value p)}
+            [:option {:value (str (profile-value p))} (profile-label p)])]
+         (case (:status state)
+           :loading [:span {:class "text-xs text-muted-foreground"} "Saving…"]
+           :success [:span {:class "text-xs text-primary"} "Saved ✓"]
+           :error   [:span {:class "text-xs text-destructive"} (or (:message state) "Error")]
+           nil)]))))
+
 (defn channel-page []
   (let [channel     @(rf/subscribe [::subs/current-channel])
         raw-events  @(rf/subscribe [::subs/current-channel-events])
@@ -361,6 +413,7 @@
        (when (:description channel)
          [:p {:class "text-muted-foreground"} (:description channel)])]
       [:div {:class "flex items-center gap-2 flex-wrap"}
+       [ffmpeg-profile-selector channel]
        (when (:id channel)
          [action-btn {:action-key [:rebuild-playout (:id channel)]
                       :label      (if playout-job "Generating…" "Rebuild Playout")
