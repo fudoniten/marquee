@@ -158,7 +158,8 @@
                      (when (= page :schedule-grid)
                        [[::load-channels]])
                      (when (= page :channel-schedule)
-                       (cond-> (when (nil? (:channels db)) [[::load-channels]])
+                       (cond-> (conj (if (nil? (:channels db)) [[::load-channels]] [])
+                                     [::load-ffmpeg-profiles])
                          channel-id (conj [::load-channel-events channel-id])))
                      (when (= page :jobs)
                        [[::load-jobs]])
@@ -762,6 +763,22 @@
        (.then (fn [data] (rf/dispatch (conj on-success (js->clj data :keywordize-keys (boolean keywordize?))))))
        (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
 
+;; Mutating HTTP (PUT/POST/DELETE) through the BFF, for endpoints not modelled
+;; in martian. Sends `body` as JSON when present and tolerates empty/204
+;; responses (on-success receives the HTTP status; the body isn't parsed).
+(rf/reg-fx
+ ::http-mutate
+ (fn [{:keys [url method body on-success on-failure]}]
+   (-> (js/fetch url (clj->js (cond-> {:method (or method "POST")}
+                                (some? body)
+                                (assoc :headers {"Content-Type" "application/json"}
+                                       :body (js/JSON.stringify (clj->js body))))))
+       (.then (fn [resp]
+                (if (.-ok resp)
+                  (rf/dispatch (conj on-success (.-status resp)))
+                  (throw (js/Error. (str "HTTP " (.-status resp) " " (.-statusText resp)))))))
+       (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
+
 (rf/reg-event-fx
  ::load-api-spec
  (fn [{:keys [db]} [_ service-id]]
@@ -918,7 +935,8 @@
                         (assoc :active-page :channel-schedule)
                         (assoc :current-channel-id channel-id))
       :push-history (routes/channel-path channel-id)
-      :dispatch-n   (cond-> [[::load-jobs] [::poll-channel-playout-job channel-id]]
+      :dispatch-n   (cond-> [[::load-jobs] [::poll-channel-playout-job channel-id]
+                             [::load-ffmpeg-profiles]]
                       need-channels? (conj [::load-channels])
                       need-events?   (conj [::load-channel-events channel-id]))})))
 
@@ -1050,6 +1068,77 @@
       (js/console.error "Server trace for" (pr-str action-key) "\n" trace))
     {:dispatch   [::set-action-state action-key :error err]
      ::timeout   {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+
+;; ---------------------------------------------------------------------------
+;; Channel ffmpeg profiles
+;;
+;; Lets the channel page switch which transcoding profile a channel uses.
+;;
+;; API contract (verified against Pseudovision):
+;;   1. list profiles: GET /api/ffmpeg/profiles → [ {:id <int> :name :config} … ]
+;;   2. a channel's current profile: the :ffmpeg-profile-id field on the channel
+;;      object (GET /api/channels/{id}) — see schedule/channel-ffmpeg-profile-id.
+;;   3. set a channel's profile: PATCH /api/channels/{id} with JSON body
+;;      {:ffmpeg-profile-id <int>}.
+;; The requests go straight to the BFF (not martian) so they don't depend on the
+;; params/body being declared in the OpenAPI spec — martian silently drops
+;; anything the spec omits.
+;; ---------------------------------------------------------------------------
+
+(def ^:private ffmpeg-profiles-url
+  "/api/pseudovision/api/ffmpeg/profiles")
+
+(defn- channel-url [channel-id]
+  (str "/api/pseudovision/api/channels/" channel-id))
+
+(rf/reg-event-fx
+ ::load-ffmpeg-profiles
+ (fn [{:keys [db]} _]
+   ;; Cached for the session; once loaded (even to false on a missing endpoint)
+   ;; we don't refetch, so a channel without the feature doesn't hammer the BFF.
+   (if (contains? db :ffmpeg-profiles)
+     {:db db}
+     {:db          db
+      ::fetch-json {:url         ffmpeg-profiles-url
+                    :keywordize? true
+                    :on-success  [::load-ffmpeg-profiles-success]
+                    :on-failure  [::load-ffmpeg-profiles-failure]}})))
+
+(rf/reg-event-db
+ ::load-ffmpeg-profiles-success
+ (fn [db [_ body]]
+   (assoc db :ffmpeg-profiles (vec (if (map? body) (:items body) body)))))
+
+(rf/reg-event-db
+ ::load-ffmpeg-profiles-failure
+ (fn [db [_ error]]
+   ;; Optional feature: a missing/renamed endpoint just hides the selector.
+   (js/console.debug "Could not load ffmpeg profiles:" error)
+   (assoc db :ffmpeg-profiles false)))
+
+(rf/reg-event-fx
+ ::set-channel-ffmpeg-profile
+ (fn [{:keys [db]} [_ channel-id profile-id]]
+   (let [k [:set-ffmpeg-profile channel-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (channel-url channel-id)
+                     :method     "PATCH"
+                     :body       {:ffmpeg-profile-id profile-id}
+                     :on-success [::set-channel-ffmpeg-profile-success channel-id]
+                     :on-failure [::set-channel-ffmpeg-profile-failure channel-id]}})))
+
+(rf/reg-event-fx
+ ::set-channel-ffmpeg-profile-success
+ (fn [_ [_ channel-id _status]]
+   ;; Reload channels so the selector reflects the persisted profile.
+   (update (action-success-fx [:set-ffmpeg-profile channel-id] "Profile updated")
+           :dispatch-n (fnil conj []) [::load-channels])))
+
+(rf/reg-event-fx
+ ::set-channel-ffmpeg-profile-failure
+ (fn [_ [_ channel-id error]]
+   ;; action-error-fx expects a response-shaped map; wrap the fetch error string.
+   (action-error-fx [:set-ffmpeg-profile channel-id] {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
 ;; Media tag management

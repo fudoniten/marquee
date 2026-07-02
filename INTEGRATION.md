@@ -147,6 +147,19 @@ Open http://localhost:8080 in your browser and click the "Media" tab.
     the UI can say "showing 50 of N". Children should be ordered by
     season/episode index (falling back to name).
 
+#### Channels & FFmpeg profiles
+- `GET /api/channels` - List channels
+- `GET /api/channels/{channel-id}/playout/events` - Channel playout events
+- `POST /api/channels/{channel-id}/playout` - Rebuild a channel's playout
+- `GET /api/ffmpeg/profiles` - List transcoding profiles. Returns a plain
+  array of `{id, name, config}`. Feeds the channel-page profile selector; if
+  the endpoint is unavailable the selector stays hidden.
+- `PATCH /api/channels/{channel-id}` with `{"ffmpeg-profile-id": <id>}` -
+  Assign a profile to a channel. The channel object (from `GET /api/channels`
+  or `.../{id}`) exposes its current profile as `ffmpeg-profile-id`. These
+  touch-points are isolated in `events.cljs` (`ffmpeg-profiles-url`,
+  `channel-url`) and `schedule/channel-ffmpeg-profile-id`.
+
 ### Tunarr Scheduler
 
 #### Metadata

@@ -282,6 +282,13 @@
    (when (and channels id)
      (first (filter #(= (:id %) id) channels)))))
 
+;; Available ffmpeg transcoding profiles: a vector once loaded, false when the
+;; endpoint isn't available, nil while loading. Feeds the channel-page selector.
+(rf/reg-sub
+ ::ffmpeg-profiles
+ (fn [db _]
+   (:ffmpeg-profiles db)))
+
 (rf/reg-sub
  ::current-channel-events
  (fn [db _]
