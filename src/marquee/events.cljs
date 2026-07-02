@@ -1074,24 +1074,22 @@
 ;;
 ;; Lets the channel page switch which transcoding profile a channel uses.
 ;;
-;; ASSUMED API CONTRACT — Marquee couldn't introspect the live Pseudovision
-;; spec, so the three touch-points below are isolated and easy to correct if the
-;; real API differs. Nothing else in the codebase depends on their shape.
-;;   1. list profiles:   GET  (ffmpeg-profiles-url) → {:items [{:id :name …}]} | [ … ]
-;;   2. a channel's current profile: read off the channel object — see
-;;      schedule/channel-ffmpeg-profile-id (assumed field :ffmpeg-profile-id).
-;;   3. set a channel's profile: PUT (set-channel-ffmpeg-profile-url id)
-;;      with JSON body {:profile-id <id>}.
-;; The request goes straight to the BFF (not martian) so it doesn't depend on
-;; the params/body being declared in the OpenAPI spec — martian silently drops
+;; API contract (verified against Pseudovision):
+;;   1. list profiles: GET /api/ffmpeg/profiles → [ {:id <int> :name :config} … ]
+;;   2. a channel's current profile: the :ffmpeg-profile-id field on the channel
+;;      object (GET /api/channels/{id}) — see schedule/channel-ffmpeg-profile-id.
+;;   3. set a channel's profile: PATCH /api/channels/{id} with JSON body
+;;      {:ffmpeg-profile-id <int>}.
+;; The requests go straight to the BFF (not martian) so they don't depend on the
+;; params/body being declared in the OpenAPI spec — martian silently drops
 ;; anything the spec omits.
 ;; ---------------------------------------------------------------------------
 
 (def ^:private ffmpeg-profiles-url
   "/api/pseudovision/api/ffmpeg/profiles")
 
-(defn- set-channel-ffmpeg-profile-url [channel-id]
-  (str "/api/pseudovision/api/channels/" channel-id "/ffmpeg-profile"))
+(defn- channel-url [channel-id]
+  (str "/api/pseudovision/api/channels/" channel-id))
 
 (rf/reg-event-fx
  ::load-ffmpeg-profiles
@@ -1123,9 +1121,9 @@
  (fn [{:keys [db]} [_ channel-id profile-id]]
    (let [k [:set-ffmpeg-profile channel-id]]
      {:db           (assoc-in db [:action-states k] {:status :loading})
-      ::http-mutate {:url        (set-channel-ffmpeg-profile-url channel-id)
-                     :method     "PUT"
-                     :body       {:profile-id profile-id}
+      ::http-mutate {:url        (channel-url channel-id)
+                     :method     "PATCH"
+                     :body       {:ffmpeg-profile-id profile-id}
                      :on-success [::set-channel-ffmpeg-profile-success channel-id]
                      :on-failure [::set-channel-ffmpeg-profile-failure channel-id]}})))
 

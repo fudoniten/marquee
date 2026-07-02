@@ -342,22 +342,21 @@
        (str (format-date-time start-ms) " · " (duration-str start-ms end-ms))]]]))
 
 ;; ── FFmpeg profile selector ──────────────────────────────────────────────────
-;; These three helpers isolate the assumed profile/channel data shape (see the
-;; events ns for the assumed API contract). Adjust here if the real API differs.
+;; These helpers isolate the profile/channel data shape (see the events ns for
+;; the API contract).
 
 (defn- profile-value
-  "The value used to identify a profile in the <select> and in the set request."
+  "The id used to identify a profile in the <select> and in the PATCH body."
   [p]
-  (or (:id p) (:name p)))
+  (:id p))
 
 (defn- profile-label [p]
-  (or (:name p) (:label p) (str (profile-value p))))
+  (or (:name p) (str (profile-value p))))
 
 (defn- channel-ffmpeg-profile-id
-  "A channel's currently-assigned profile id, read off the channel object.
-   ASSUMED field name — adjust if the API exposes it differently."
+  "A channel's currently-assigned ffmpeg profile id."
   [channel]
-  (or (:ffmpeg-profile-id channel) (:ffmpeg-profile channel)))
+  (:ffmpeg-profile-id channel))
 
 (defn- ffmpeg-profile-selector
   "Dropdown to switch a channel's transcoding profile. Renders only when the
