@@ -141,7 +141,7 @@
             cd "''${1:-$PWD}"
             PORT="''${PORT:-8080}"
             BFF_PORT="''${BFF_PORT:-3000}"
-            
+
             echo "Starting Marquee development environment..."
             echo "  Frontend (shadow-cljs): http://localhost:$PORT"
             echo "  BFF server:             http://localhost:$BFF_PORT"
@@ -175,7 +175,7 @@
             # Start BFF server in background
             echo "Starting BFF server on port $BFF_PORT..."
             clojure -M:server &
-            
+
             # Wait a moment for BFF to start
             sleep 2
 
@@ -185,9 +185,45 @@
           '';
         };
 
+        # Source tree passed to `mkClojureBin` for the BFF uberjar.
+        # Mirrors the project source but replaces `public/` with the SPA
+        # assets produced by the `site` derivation so the resulting uberjar
+        # can serve compiled JS/CSS/index.html from the classpath alongside
+        # the Clojure BFF.
+        bffSrc = pkgs.stdenv.mkDerivation {
+          name = "marquee-bff-src";
+          phases = [ "buildPhase" "installPhase" ];
+          # Stage everything into the writable build directory first; the
+          # install phase then promotes the finished layout into $out so the
+          # intermediate store path is never written to read-only.
+          buildPhase = ''
+            runHook preBuild
+            cp -rp ${./.}/. .
+            chmod -R u+w .
+            rm -rf public
+            cp -rLp ${site}/. public
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            install -m 0755 -d $out
+            cp -rp . $out/
+            runHook postInstall
+          '';
+        };
+
       in {
         packages.default = site;
         packages.site = site;
+
+        # Runnable BFF: a Clojure uberjar that AOT-compiles
+        # `marquee.server.core` and embeds the compiled SPA at `public/`.
+        packages.bff = helpers.mkClojureBin {
+          name = "org.fudo/marquee-server";
+          primaryNamespace = "marquee.server.core";
+          src = bffSrc;
+        };
 
         packages.deployContainer = let version = versionInfo;
         in helpers.deployContainers {
@@ -199,7 +235,7 @@
             GIT_TIMESTAMP = version.gitTimestamp;
             VERSION = version.versionTag;
           };
-          entrypoint = [ "${serve}/bin/marquee" ];
+          entrypoint = [ "${self.packages."${system}".bff}/bin/marquee-server" ];
           verbose = true;
         };
 

@@ -1,9 +1,12 @@
 (ns marquee.server.core
+  (:gen-class)
   (:require [org.httpkit.server :as http]
             [ring.middleware.json :refer [wrap-json-response]]
+            [ring.middleware.resource :refer [wrap-resource]]
             [ring.util.response :as resp]
             [clj-http.client :as client]
             [marquee.server.config :as config]
+            [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.io StringWriter PrintWriter]))
 
@@ -152,7 +155,14 @@
   (when-let [[_ id] (re-find #"^/api/([^/]+)" uri)]
     (keyword id)))
 
-(defn handler [req]
+(def ^:private index-html
+  (delay (slurp (io/resource "public/index.html"))))
+
+(defn- spa-index [req]
+  (-> (resp/response @index-html)
+      (resp/content-type "text/html")))
+
+(defn handler [req] 
   (let [uri  (:uri req)
         sid  (service-id uri)
         svc  (and sid (get config/services sid))]
@@ -172,8 +182,7 @@
       (nil? sid)
       ;; SPA catch-all: serve index.html for any non-API path so that
       ;; deep links and browser back/forward work with pushState routing.
-      (-> (resp/response (slurp "public/index.html"))
-          (resp/content-type "text/html"))
+      (spa-index req)
 
       (nil? svc)
       {:status 404 :body {:error (str "Unknown service: " (name sid))}}
@@ -207,9 +216,14 @@
            :body   {:error (.getMessage t)
                     :trace trace}})))))
 
-(def app (-> handler wrap-exception-logging wrap-json-response))
+(def app (-> handler
+             ;; Serve compiled SPA assets (CSS, JS, images) from the embedded
+             ;; `public/` tree before falling through to API/SPA handlers.
+             (wrap-resource "public")
+             wrap-exception-logging
+             wrap-json-response))
 
-(defn -main [& _]
+(defn -main [& _] 
   (try
     (config/validate!)
     (preload-specs!)
@@ -217,6 +231,6 @@
       (binding [*out* *err*]
         (println "Startup failed:" (.getMessage e)))
       (System/exit 1)))
-  (let [port (Integer/parseInt (or (System/getenv "PORT") "3000"))]
+  (let [port (Integer/parseInt (or (System/getenv "PORT") "8080"))]
     (http/run-server app {:port port})
-    (println (str "BFF listening on port " port))))
+    (println (str "Marquee listening on port " port))))
