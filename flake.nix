@@ -186,10 +186,11 @@
         };
 
         # Source tree passed to `mkClojureBin` for the BFF uberjar.
-        # Mirrors the project source but replaces `public/` with the SPA
-        # assets produced by the `site` derivation so the resulting uberjar
-        # can serve compiled JS/CSS/index.html from the classpath alongside
-        # the Clojure BFF.
+        # Mirrors the project source and adds the SPA assets produced by the
+        # `site` derivation under `resources/public/`. Because `resources` is
+        # on `:paths` (see deps.edn), clj-nix's uberjar builder copies it into
+        # the jar, so the compiled index.html/JS/CSS are available on the
+        # classpath under `public/` for `io/resource` / `wrap-resource`.
         bffSrc = pkgs.stdenv.mkDerivation {
           name = "marquee-bff-src";
           phases = [ "buildPhase" "installPhase" ];
@@ -200,8 +201,13 @@
             runHook preBuild
             cp -rp ${./.}/. .
             chmod -R u+w .
-            rm -rf public
-            cp -rLp ${site}/. public
+            # `marquee.server.dev` is a shadow-cljs dev-only proxy predicate
+            # that imports a shadow class; it is not part of the BFF and must
+            # not be AOT-compiled into the uberjar, so drop it from the build.
+            rm -f src/marquee/server/dev.clj
+            # Embed the compiled SPA as classpath resources under `public/`.
+            mkdir -p resources/public
+            cp -rLp ${site}/. resources/public/
             runHook postBuild
           '';
           installPhase = ''
