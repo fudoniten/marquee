@@ -13,8 +13,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Kept for later use (building/pushing Docker images). Not used by the
-    # build/run/update outputs below yet.
+    # `fudoniten/fudo-nix-helpers` provides `deployContainers` for building
+    # and pushing OCI images (used by the `deployContainer` output below).
     nix-helpers = {
       url = "github:fudoniten/fudo-nix-helpers";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -26,6 +26,22 @@
       let
         pkgs = nixpkgs.legacyPackages."${system}";
         clj-pkgs = clj-nix.packages."${system}";
+        helpers = nix-helpers.legacyPackages."${system}";
+
+        # Version information (git commit + timestamp)
+        versionInfo = let
+          gitCommit = self.rev or self.dirtyRev or "unknown";
+          gitTimestamp = if self ? lastModified then
+            let
+              ts = toString self.lastModified;
+              year = builtins.substring 0 4 ts;
+              month = builtins.substring 4 2 ts;
+              day = builtins.substring 6 2 ts;
+            in "${year}${month}${day}"
+          else
+            "dev";
+          versionTag = "${builtins.substring 0 7 gitCommit}-${gitTimestamp}";
+        in { inherit gitCommit gitTimestamp versionTag; };
 
         nodejs = pkgs.nodejs_22;
 
@@ -173,9 +189,29 @@
         packages.default = site;
         packages.site = site;
 
+        packages.deployContainer = let version = versionInfo;
+        in helpers.deployContainers {
+          name = "marquee";
+          repo = "registry.kube.sea.fudo.link";
+          tags = [ "latest" version.versionTag ];
+          env = {
+            GIT_COMMIT = version.gitCommit;
+            GIT_TIMESTAMP = version.gitTimestamp;
+            VERSION = version.versionTag;
+          };
+          entrypoint = [ "${serve}/bin/marquee" ];
+          verbose = true;
+        };
+
         apps.default = {
           type = "app";
           program = "${serve}/bin/marquee";
+        };
+        apps.deployContainer = {
+          type = "app";
+          program = "${
+              self.packages."${system}".deployContainer
+            }/bin/deployContainers";
         };
         apps.update = {
           type = "app";
