@@ -466,7 +466,7 @@
                    ^{:key v}
                    [:span {:class "inline-flex items-center gap-1 rounded-full bg-primary/10 pl-2.5 pr-1 py-0.5 text-xs font-medium text-primary"}
                     [:button {:class    "hover:text-primary/70"
-                              :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
+                              :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str (key-name dim) ":" v)])}
                      (str v)]
                     (when editable?
                       [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-primary/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
