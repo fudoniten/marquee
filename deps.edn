@@ -1,15 +1,29 @@
-{:paths ["src"]
+;; `resources` is on :paths so the compiled SPA (staged into resources/public
+;; by the `bffSrc` derivation in flake.nix) is bundled into the BFF uberjar as
+;; classpath resources under `public/`. It does not exist in the plain source
+;; tree and is simply ignored by the frontend (shadow-cljs) build.
+{:paths ["src" "resources"]
  :deps {org.clojure/clojure          {:mvn/version "1.12.4"}
         org.clojure/clojurescript    {:mvn/version "1.12.145"}
         thheller/shadow-cljs         {:mvn/version "3.4.11"}
         reagent/reagent              {:mvn/version "2.0.1"}
         re-frame/re-frame            {:mvn/version "1.4.7"}
-        com.github.oliyh/martian-re-frame {:mvn/version "0.2.3"}}
+        com.github.oliyh/martian-re-frame {:mvn/version "0.2.3"}
+
+        ;; BFF (marquee.server.*) runtime dependencies. These live in :deps
+        ;; rather than an alias because the Nix uberjar build (clj-nix's
+        ;; mkCljBin) compiles and packages against the *default* basis
+        ;; (`clojure.tools.build.api/create-basis {:project "deps.edn"}`),
+        ;; which ignores aliases. Kept in :deps, they are on the classpath
+        ;; when `marquee.server.core` (`:gen-class`) is AOT-compiled and are
+        ;; embedded in the resulting uberjar.
+        http-kit/http-kit  {:mvn/version "2.8.1"}
+        ring/ring-core     {:mvn/version "1.15.4"}
+        ring/ring-json     {:mvn/version "0.5.1"}
+        clj-http/clj-http  {:mvn/version "3.13.1"}
+        cheshire/cheshire  {:mvn/version "6.2.0"}}
 
  :aliases
- {:server {:main-opts  ["-m" "marquee.server.core"]
-           :extra-deps {http-kit/http-kit  {:mvn/version "2.8.1"}
-                        ring/ring-core     {:mvn/version "1.15.4"}
-                        ring/ring-json     {:mvn/version "0.5.1"}
-                        clj-http/clj-http  {:mvn/version "3.13.1"}
-                        cheshire/cheshire  {:mvn/version "6.2.0"}}}}}
+ ;; Convenience alias for running the BFF directly in development
+ ;; (`clojure -M:server`); its dependencies now live in :deps above.
+ {:server {:main-opts ["-m" "marquee.server.core"]}}}
