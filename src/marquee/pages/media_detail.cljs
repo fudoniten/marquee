@@ -176,24 +176,6 @@
                 :on-click #(rf/dispatch [::events/navigate-to-media-detail parent-id])}
        (str parent-id)]]]))
 
-(defn- dimension-chips
-  "Render dimension categories as clickable chips."
-  [categories]
-  (when (and (map? categories) (seq categories))
-    [:div {:class "py-2"}
-     [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Dimensions"]
-     [:div {:class "space-y-2"}
-      (for [[dim values] categories]
-        ^{:key dim}
-        [:div {:class "flex flex-wrap items-center gap-1.5"}
-         [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
-          (str (humanize dim) ":")]
-         (for [v values]
-           ^{:key v}
-           [:button {:class "inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-                     :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
-            (str v)])])]]))
-
 (defn- accent-chips
   "Chips rendered in the accent hue, for attributes inherited from a parent so
    they read as distinct from the item's own (secondary/primary) chips. Each
@@ -252,6 +234,7 @@
     "channels" "taglines" "parent-id" "categories"})
 
 (declare tag-editor)
+(declare category-editor)
 
 (defn- curation-card [media-id]
   [card {}
@@ -288,7 +271,7 @@
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key loading? numeric-id categories ancestors]}]
+  [{:keys [merged remote-key loading? numeric-id media-id categories ancestors]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -312,7 +295,7 @@
          [tag-editor numeric-id
           (or (field-by-name merged "tags") (:tags merged))]]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
-       [dimension-chips categories]
+       [category-editor media-id remote-key categories]
        [parent-attributes-section ancestors]
        [remaining-fields merged known-fields]])]])
 
@@ -429,6 +412,78 @@
                                   (rf/dispatch [::events/add-media-tag numeric-id tag])
                                   (reset! new-tag "")))}
            "Add"]]]))))
+
+;;; ── Category (dimension) editor ──────────────────────────────────────────────
+
+(def ^:private input-class
+  "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+(defn- category-editor
+  "Editable dimension values. Categories live in Tunarr Scheduler, keyed by the
+   item's Jellyfin remote-key, so editing is only offered when the item has one
+   (otherwise the values render as read-only chips, as before). Each value
+   carries an × to remove it; new values are added by picking a dimension from
+   the dropdown and typing a value. Value chips still link into Browse."
+  [media-id remote-key categories]
+  (let [new-dim   (r/atom "")
+        new-value (r/atom "")]
+    (fn [media-id remote-key categories]
+      (let [dimensions @(rf/subscribe [::subs/browse-list :dimensions])
+            dim-names  (->> dimensions (keep :name) (map key-name) distinct sort)
+            editable?  (some? remote-key)
+            has-cats?  (and (map? categories) (seq categories))
+            submit     (fn []
+                         (let [dim (str/trim @new-dim)
+                               val (str/trim @new-value)]
+                           (when (and (seq dim) (seq val))
+                             (rf/dispatch [::events/add-media-category media-id remote-key dim val])
+                             ;; Keep the dimension selected so several values can
+                             ;; be added in a row; just clear the value input.
+                             (reset! new-value ""))))]
+        ;; Nothing to show or do for a non-editable item with no dimensions.
+        (when (or editable? has-cats?)
+          [:div {:class "py-2"}
+           [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Dimensions"]
+           (if has-cats?
+             [:div {:class "space-y-2"}
+              (for [[dim values] categories]
+                ^{:key dim}
+                [:div {:class "flex flex-wrap items-center gap-1.5"}
+                 [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
+                  (str (humanize dim) ":")]
+                 (for [v values]
+                   ^{:key v}
+                   [:span {:class "inline-flex items-center gap-1 rounded-full bg-primary/10 pl-2.5 pr-1 py-0.5 text-xs font-medium text-primary"}
+                    [:button {:class    "hover:text-primary/70"
+                              :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
+                     (str v)]
+                    (when editable?
+                      [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-primary/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
+                                :title    "Remove"
+                                :on-click #(rf/dispatch [::events/remove-media-category media-id remote-key (key-name dim) (str v)])}
+                       "×"])])])]
+             [:p {:class "text-xs text-muted-foreground"} "No dimensions set."])
+           (when editable?
+             [:div {:class "flex flex-wrap gap-2 mt-2"}
+              [:select {:class     input-class
+                        :value     @new-dim
+                        :on-change #(reset! new-dim (.. % -target -value))}
+               [:option {:value ""} "Dimension…"]
+               (for [d dim-names]
+                 ^{:key d} [:option {:value d} (humanize d)])]
+              [:input {:type        "text"
+                       :class       input-class
+                       :placeholder "Value…"
+                       :value       @new-value
+                       :on-change   #(reset! new-value (.. % -target -value))
+                       :on-key-down #(when (= "Enter" (.-key %))
+                                       (.preventDefault %)
+                                       (submit))}]
+              [button {:size     :sm
+                       :variant  :outline
+                       :disabled (or (str/blank? @new-dim) (str/blank? @new-value))
+                       :on-click submit}
+               "Set"]])])))))
 
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
