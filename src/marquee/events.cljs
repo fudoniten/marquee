@@ -132,8 +132,10 @@
     :push-history (routes/media-detail-path media-id)
     ;; Scheduler metadata is loaded from ::load-media-item-success, because
     ;; Tunarr Scheduler keys its catalog by the item's Jellyfin remote-key,
-    ;; which we only know once the Pseudovision item arrives.
-    :dispatch     [::load-media-item media-id]}))
+    ;; which we only know once the Pseudovision item arrives. The dimensions
+    ;; list feeds the category editor's dimension picker (cached, so cheap).
+    :dispatch-n   [[::load-media-item media-id]
+                   [::load-browse-facet :dimensions]]}))
 
 (rf/reg-event-fx
  ::restore-from-url
@@ -148,7 +150,8 @@
                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                        [[::select-api-service :pseudovision]])
                      (when (= page :media-detail)
-                       [[::load-media-item media-id]])
+                       [[::load-media-item media-id]
+                        [::load-browse-facet :dimensions]])
                      (when (= page :browse)
                        (cond-> [[::load-browse-facet (or facet :tags)]]
                          selection (conj (if (and (= facet :dimensions)
@@ -459,11 +462,17 @@
                                         :tunarr.scheduler.media/channel-names "channel"
                                         (name k))
                                       v]))
-                              (into {})))]
-     {:db (-> db
-              (assoc-in [:scheduler-metadata media-id] metadata)
-              (assoc-in [:media-categories media-id] (or fallback-cats
-                                                         (get-in db [:media-categories media-id]))))
+                              (into {})))
+         ;; Scheduler is the source of truth for tags; seed the tag editor's set
+         ;; from the metadata blob. Tag mutations overwrite this from their
+         ;; (authoritative) response, so a wrong/absent key self-corrects on the
+         ;; first edit.
+         ts-tags       (when (map? metadata) (:tunarr.scheduler.media/tags metadata))]
+     {:db (cond-> (-> db
+                      (assoc-in [:scheduler-metadata media-id] metadata)
+                      (assoc-in [:media-categories media-id] (or fallback-cats
+                                                                 (get-in db [:media-categories media-id]))))
+            (some? ts-tags) (assoc-in [:media-item-tags media-id] (vec ts-tags)))
       :dispatch [::load-media-categories media-id remote-key]})))
 
 (rf/reg-event-db
@@ -775,7 +784,15 @@
                                        :body (js/JSON.stringify (clj->js body))))))
        (.then (fn [resp]
                 (if (.-ok resp)
-                  (rf/dispatch (conj on-success (.-status resp)))
+                  ;; Hand the parsed JSON body (keywordized; nil for empty/204
+                  ;; responses) to on-success, so callers can use the server's
+                  ;; post-change state without a follow-up GET.
+                  (.then (.text resp)
+                         (fn [t]
+                           (let [parsed (when-not (or (nil? t) (= t ""))
+                                          (try (js->clj (js/JSON.parse t) :keywordize-keys true)
+                                               (catch :default _ nil)))]
+                             (rf/dispatch (conj on-success parsed)))))
                   (throw (js/Error. (str "HTTP " (.-status resp) " " (.-statusText resp)))))))
        (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
 
@@ -1166,56 +1183,121 @@
    (log-request-failure (str "Failed to load tags for media: " numeric-id) response)
    (assoc-in db [:media-tags numeric-id] [])))
 
+;; Tunarr Scheduler — not Pseudovision — is the source of truth for tags: it
+;; takes Pseudovision's tags, prunes them, regenerates via Tunabrain, and syncs
+;; the result back to Pseudovision. So manual edits are applied in Tunarr
+;; Scheduler; editing tags in Pseudovision instead would get clobbered on the
+;; next sync. `:media-id` in the path is the item's Jellyfin remote-key (the
+;; endpoint resolves external ids through Pseudovision). Every mutation returns
+;; the item's current tags ({:media-id :tags}), so we store that directly rather
+;; than refetching. Writes go straight to the BFF via ::http-mutate.
+;;   GET/POST/PUT /api/media-item/{media-id}/tags   {:tags [...]}
+;;   DELETE       /api/media-item/{media-id}/tags/{tag}
+;; `media-id` here is the app-db key (route id) the tags are cached under.
+
+(defn- media-item-tags-url [remote-key]
+  (str "/api/tunarr-scheduler/api/media-item/" remote-key "/tags"))
+
 (rf/reg-event-fx
  ::add-media-tag
- (fn [{:keys [db]} [_ numeric-id tag]]
-   (let [k [:add-tag numeric-id tag]]
-     {:db (assoc-in db [:action-states k] {:status :loading})
-      :dispatch [::martian/request
-                 :post-api-media-items-id-tags
-                 {::martian/instance-id :pseudovision
-                  :id numeric-id
-                  :tags [tag]
-                  :source "manual"}
-                 [::add-media-tag-success numeric-id tag]
-                 [::add-media-tag-failure numeric-id tag]]})))
-
-(rf/reg-event-fx
- ::add-media-tag-success
- (fn [{:keys [db]} [_ numeric-id tag _response]]
-   (let [k [:add-tag numeric-id tag]]
-     (update (action-success-fx k (str "Added tag: " tag))
-             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
-
-(rf/reg-event-fx
- ::add-media-tag-failure
- (fn [_ [_ numeric-id tag response]]
-   (action-error-fx [:add-tag numeric-id tag] response)))
+ (fn [{:keys [db]} [_ media-id remote-key tag]]
+   (let [k [:add-tag media-id tag]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (media-item-tags-url remote-key)
+                     :method     "POST"
+                     :body       {:tags [tag]}
+                     :on-success [::store-media-tags media-id k (str "Added tag: " tag)]
+                     :on-failure [::change-media-tag-failure k]}})))
 
 (rf/reg-event-fx
  ::remove-media-tag
- (fn [{:keys [db]} [_ numeric-id tag]]
-   (let [k [:remove-tag numeric-id tag]]
-     {:db (assoc-in db [:action-states k] {:status :loading})
-      :dispatch [::martian/request
-                 :delete-api-media-items-id-tags-tag
-                 {::martian/instance-id :pseudovision
-                  :id numeric-id
-                  :tag tag}
-                 [::remove-media-tag-success numeric-id tag]
-                 [::remove-media-tag-failure numeric-id tag]]})))
+ (fn [{:keys [db]} [_ media-id remote-key tag]]
+   (let [k [:remove-tag media-id tag]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-tags-url remote-key) "/" (js/encodeURIComponent tag))
+                     :method     "DELETE"
+                     :on-success [::store-media-tags media-id k (str "Removed tag: " tag)]
+                     :on-failure [::change-media-tag-failure k]}})))
 
 (rf/reg-event-fx
- ::remove-media-tag-success
- (fn [{:keys [db]} [_ numeric-id tag _response]]
-   (let [k [:remove-tag numeric-id tag]]
-     (update (action-success-fx k (str "Removed tag: " tag))
-             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
+ ::store-media-tags
+ (fn [{:keys [db]} [_ media-id k message body]]
+   ;; body is the MediaTagsResponse {:media-id :tags} returned by the mutation.
+   (assoc (action-success-fx k message)
+          :db (assoc-in db [:media-item-tags media-id] (vec (:tags body))))))
 
 (rf/reg-event-fx
- ::remove-media-tag-failure
- (fn [_ [_ numeric-id tag response]]
-   (action-error-fx [:remove-tag numeric-id tag] response)))
+ ::change-media-tag-failure
+ (fn [_ [_ k error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape.
+   (action-error-fx k {:body {:message error}})))
+
+;; ---------------------------------------------------------------------------
+;; Media category (dimension) management
+;;
+;; Unlike tags (which are read from Pseudovision), a media item's dimension
+;; values — audience, channel, etc. — are the categories stored in Tunarr
+;; Scheduler, edited there for the same source-of-truth reason as tags. Reads
+;; stay on the existing endpoint; per-dimension edits use the media-item routes
+;; (the category name is a path segment, and each mutation returns that one
+;; dimension's current values as {:media-id :category :values}):
+;;   POST   /api/media-item/{media-id}/categories/{category}   {:values [...] :rationale ...}
+;;   DELETE /api/media-item/{media-id}/categories/{category}/values/{value}
+;;
+;; Writes go straight to the BFF via ::http-mutate; the response's value list is
+;; merged into the cached categories map. `remote-key` is the path id; `media-id`
+;; is the app-db key the categories are cached under.
+;; ---------------------------------------------------------------------------
+
+(defn- media-item-category-url [remote-key category]
+  (str "/api/tunarr-scheduler/api/media-item/" remote-key
+       "/categories/" (js/encodeURIComponent category)))
+
+(rf/reg-event-fx
+ ::add-media-category
+ (fn [{:keys [db]} [_ media-id remote-key dimension value]]
+   (let [k [:add-category media-id dimension value]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (media-item-category-url remote-key dimension)
+                     :method     "POST"
+                     :body       {:values [value] :rationale "manual edit from Marquee"}
+                     :on-success [::store-media-category media-id k (str "Added " dimension ": " value)]
+                     :on-failure [::change-media-category-failure k]}})))
+
+(rf/reg-event-fx
+ ::remove-media-category
+ (fn [{:keys [db]} [_ media-id remote-key dimension value]]
+   (let [k [:remove-category media-id dimension value]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-category-url remote-key dimension)
+                                       "/values/" (js/encodeURIComponent value))
+                     :method     "DELETE"
+                     :on-success [::store-media-category media-id k (str "Removed " dimension ": " value)]
+                     :on-failure [::change-media-category-failure k]}})))
+
+(rf/reg-event-fx
+ ::store-media-category
+ (fn [{:keys [db]} [_ media-id k message body]]
+   ;; body is MediaCategoryValuesResponse {:media-id :category :values} for the
+   ;; one edited dimension. Merge it into the cached {dimension → [value …]} map,
+   ;; normalising the key to a string (the map can carry either string or keyword
+   ;; keys depending on which loader populated it) and dropping the dimension
+   ;; entirely once its last value is removed.
+   (let [dim-name (key-name (:category body))
+         values   (vec (:values body))
+         existing (get-in db [:media-categories media-id])
+         base     (if (map? existing) existing {})
+         cleaned  (into {} (remove (fn [[ck _]] (= (key-name ck) dim-name)) base))
+         cats     (if (seq values) (assoc cleaned dim-name values) cleaned)]
+     (assoc (action-success-fx k message)
+            :db (assoc-in db [:media-categories media-id] cats)))))
+
+(rf/reg-event-fx
+ ::change-media-category-failure
+ (fn [_ [_ k error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape
+   ;; action-error-fx expects.
+   (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
 ;; Pseudovision triggers

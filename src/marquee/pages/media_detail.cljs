@@ -176,24 +176,6 @@
                 :on-click #(rf/dispatch [::events/navigate-to-media-detail parent-id])}
        (str parent-id)]]]))
 
-(defn- dimension-chips
-  "Render dimension categories as clickable chips."
-  [categories]
-  (when (and (map? categories) (seq categories))
-    [:div {:class "py-2"}
-     [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Dimensions"]
-     [:div {:class "space-y-2"}
-      (for [[dim values] categories]
-        ^{:key dim}
-        [:div {:class "flex flex-wrap items-center gap-1.5"}
-         [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
-          (str (humanize dim) ":")]
-         (for [v values]
-           ^{:key v}
-           [:button {:class "inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-                     :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str dim ":" v)])}
-            (str v)])])]]))
-
 (defn- accent-chips
   "Chips rendered in the accent hue, for attributes inherited from a parent so
    they read as distinct from the item's own (secondary/primary) chips. Each
@@ -252,6 +234,7 @@
     "channels" "taglines" "parent-id" "categories"})
 
 (declare tag-editor)
+(declare category-editor)
 
 (defn- curation-card [media-id]
   [card {}
@@ -288,7 +271,7 @@
 
 (defn- detail-card
   "Main metadata card merging Pseudovision + scheduler fields."
-  [{:keys [merged remote-key loading? numeric-id categories ancestors]}]
+  [{:keys [merged remote-key loading? numeric-id media-id categories ancestors]}]
   [card {}
    [card-content {:class "pt-6"}
     (if loading?
@@ -309,10 +292,9 @@
         [parent-field-row (:parent-id merged)]]
         [:div {:class "py-2"}
          [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Tags"]
-         [tag-editor numeric-id
-          (or (field-by-name merged "tags") (:tags merged))]]
+         [tag-editor media-id remote-key numeric-id]]
        [chip-list "Taglines" (or (field-by-name merged "taglines") (:taglines merged))]
-       [dimension-chips categories]
+       [category-editor media-id remote-key categories]
        [parent-attributes-section ancestors]
        [remaining-fields merged known-fields]])]])
 
@@ -381,54 +363,138 @@
              (when already?
                 [:span {:class "text-xs"} "✓"])]))])]))
 
-;;; ── Tag Editor ──────────────────────────────────────────────────────────────
+;;; ── Tag & category editors ───────────────────────────────────────────────────
 
-(defn- tag-editor [numeric-id scheduler-tags]
+(def ^:private input-class
+  "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+(defn- tag-editor
+  "Editable tags. Tunarr Scheduler is the source of truth for tags — it prunes
+   Pseudovision's tags, regenerates them via Tunabrain, and syncs the result
+   back to Pseudovision — so edits are applied there (keyed by the item's
+   Jellyfin remote-key) and would otherwise be clobbered on the next sync.
+   Editing is only offered when the item has a remote-key. Tags present in
+   Pseudovision but not (yet) in Scheduler are shown muted for reference."
+  [media-id remote-key numeric-id]
   (let [new-tag (r/atom "")]
-    (fn [numeric-id scheduler-tags]
-      (let [pv-tags   (mapv (fn [t] (if (keyword? t) (name t) (str t))) 
-                           @(rf/subscribe [::subs/media-tags numeric-id]))
-            sched-tags (mapv (fn [t] (if (keyword? t) (name t) (str t))) 
-                            (or scheduler-tags []))
-            pv-set    (set pv-tags)
-            all-tags  (vec (distinct (concat pv-tags sched-tags)))]
+    (fn [media-id remote-key numeric-id]
+      (let [->str     (fn [t] (if (keyword? t) (name t) (str t)))
+            ts-tags   (mapv ->str @(rf/subscribe [::subs/scheduler-tags media-id]))
+            pv-tags   (mapv ->str @(rf/subscribe [::subs/media-tags numeric-id]))
+            ts-set    (set ts-tags)
+            pv-only   (vec (remove ts-set pv-tags))
+            editable? (some? remote-key)
+            add!      (fn []
+                        (let [tag (str/trim @new-tag)]
+                          (when (seq tag)
+                            (rf/dispatch [::events/add-media-tag media-id remote-key tag])
+                            (reset! new-tag ""))))]
         [:div {:class "space-y-2"}
-         (when (seq all-tags)
+         (when (or (seq ts-tags) (seq pv-only))
            [:div {:class "flex flex-wrap gap-1.5"}
-            (for [tag all-tags]
-              (let [in-pv? (contains? pv-set tag)]
-                ^{:key tag}
-                [:span {:class (str "inline-flex items-center gap-1 rounded-full pl-2.5 pr-1 py-0.5 text-xs font-medium "
-                                    (if in-pv?
-                                      "bg-secondary text-secondary-foreground"
-                                      "bg-muted text-muted-foreground"))}
-                 [:button {:class "hover:text-primary"
-                           :on-click #(rf/dispatch [::events/browse-select-item :tags tag])}
-                  tag]
-                 (when in-pv?
-                   [:button {:class "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-secondary-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
-                             :on-click #(rf/dispatch [::events/remove-media-tag numeric-id tag])}
-                    "×"])]))])
-         [:div {:class "flex gap-2"}
-          [:input {:type "text"
-                   :class "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                   :placeholder "Add tag..."
-                   :value @new-tag
-                   :on-change #(reset! new-tag (.. % -target -value))
-                   :on-key-down #(when (= "Enter" (.-key %))
-                                    (.preventDefault %)
-                                    (let [tag (str/trim @new-tag)]
-                                      (when (seq tag)
-                                        (rf/dispatch [::events/add-media-tag numeric-id tag])
-                                        (reset! new-tag ""))))}]
-          [button {:size :sm
-                   :variant :outline
-                   :disabled (str/blank? @new-tag)
-                   :on-click #(let [tag (str/trim @new-tag)]
-                                (when (seq tag)
-                                  (rf/dispatch [::events/add-media-tag numeric-id tag])
-                                  (reset! new-tag "")))}
-           "Add"]]]))))
+            ;; Scheduler tags — the authoritative, editable set.
+            (for [tag ts-tags]
+              ^{:key tag}
+              [:span {:class "inline-flex items-center gap-1 rounded-full bg-secondary pl-2.5 pr-1 py-0.5 text-xs font-medium text-secondary-foreground"}
+               [:button {:class    "hover:text-primary"
+                         :on-click #(rf/dispatch [::events/browse-select-item :tags tag])}
+                tag]
+               (when editable?
+                 [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-secondary-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
+                           :title    "Remove"
+                           :on-click #(rf/dispatch [::events/remove-media-tag media-id remote-key tag])}
+                  "×"])])
+            ;; Tags only in Pseudovision — downstream copies pending re-sync,
+            ;; shown muted and not directly editable.
+            (for [tag pv-only]
+              ^{:key (str "pv-" tag)}
+              [:span {:class "inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground"
+                      :title "In Pseudovision, not in Scheduler"}
+               [:button {:class    "hover:text-primary"
+                         :on-click #(rf/dispatch [::events/browse-select-item :tags tag])}
+                tag]])])
+         (when editable?
+           [:div {:class "flex gap-2"}
+            [:input {:type        "text"
+                     :class       input-class
+                     :placeholder "Add tag..."
+                     :value       @new-tag
+                     :on-change   #(reset! new-tag (.. % -target -value))
+                     :on-key-down #(when (= "Enter" (.-key %))
+                                     (.preventDefault %)
+                                     (add!))}]
+            [button {:size     :sm
+                     :variant  :outline
+                     :disabled (str/blank? @new-tag)
+                     :on-click add!}
+             "Add"]])]))))
+
+(defn- category-editor
+  "Editable dimension values. Categories live in Tunarr Scheduler, keyed by the
+   item's Jellyfin remote-key, so editing is only offered when the item has one
+   (otherwise the values render as read-only chips, as before). Each value
+   carries an × to remove it; new values are added by picking a dimension from
+   the dropdown and typing a value. Value chips still link into Browse."
+  [media-id remote-key categories]
+  (let [new-dim   (r/atom "")
+        new-value (r/atom "")]
+    (fn [media-id remote-key categories]
+      (let [dimensions @(rf/subscribe [::subs/browse-list :dimensions])
+            dim-names  (->> dimensions (keep :name) (map key-name) distinct sort)
+            editable?  (some? remote-key)
+            has-cats?  (and (map? categories) (seq categories))
+            submit     (fn []
+                         (let [dim (str/trim @new-dim)
+                               val (str/trim @new-value)]
+                           (when (and (seq dim) (seq val))
+                             (rf/dispatch [::events/add-media-category media-id remote-key dim val])
+                             ;; Keep the dimension selected so several values can
+                             ;; be added in a row; just clear the value input.
+                             (reset! new-value ""))))]
+        ;; Nothing to show or do for a non-editable item with no dimensions.
+        (when (or editable? has-cats?)
+          [:div {:class "py-2"}
+           [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Dimensions"]
+           (if has-cats?
+             [:div {:class "space-y-2"}
+              (for [[dim values] categories]
+                ^{:key dim}
+                [:div {:class "flex flex-wrap items-center gap-1.5"}
+                 [:span {:class "text-xs font-medium text-muted-foreground mr-1"}
+                  (str (humanize dim) ":")]
+                 (for [v values]
+                   ^{:key v}
+                   [:span {:class "inline-flex items-center gap-1 rounded-full bg-primary/10 pl-2.5 pr-1 py-0.5 text-xs font-medium text-primary"}
+                    [:button {:class    "hover:text-primary/70"
+                              :on-click #(rf/dispatch [::events/browse-select-item :dimensions (str (key-name dim) ":" v)])}
+                     (str v)]
+                    (when editable?
+                      [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-primary/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
+                                :title    "Remove"
+                                :on-click #(rf/dispatch [::events/remove-media-category media-id remote-key (key-name dim) (str v)])}
+                       "×"])])])]
+             [:p {:class "text-xs text-muted-foreground"} "No dimensions set."])
+           (when editable?
+             [:div {:class "flex flex-wrap gap-2 mt-2"}
+              [:select {:class     input-class
+                        :value     @new-dim
+                        :on-change #(reset! new-dim (.. % -target -value))}
+               [:option {:value ""} "Dimension…"]
+               (for [d dim-names]
+                 ^{:key d} [:option {:value d} (humanize d)])]
+              [:input {:type        "text"
+                       :class       input-class
+                       :placeholder "Value…"
+                       :value       @new-value
+                       :on-change   #(reset! new-value (.. % -target -value))
+                       :on-key-down #(when (= "Enter" (.-key %))
+                                       (.preventDefault %)
+                                       (submit))}]
+              [button {:size     :sm
+                       :variant  :outline
+                       :disabled (or (str/blank? @new-dim) (str/blank? @new-value))
+                       :on-click submit}
+               "Set"]])])))))
 
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
