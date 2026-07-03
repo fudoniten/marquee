@@ -67,6 +67,17 @@
  (fn [db [_ media-id]]
    (get-in db [:scheduler-metadata media-id])))
 
+;; Tags carried by the Tunarr Scheduler metadata. Scheduler is the source of
+;; truth for tags (it prunes/regenerates them and syncs back to Pseudovision),
+;; so the detail-page tag editor reads and edits this set rather than the
+;; downstream Pseudovision copy.
+(rf/reg-sub
+ ::scheduler-tags
+ (fn [db [_ media-id]]
+   (let [md (get-in db [:scheduler-metadata media-id])]
+     (when (map? md)
+       (get md :tunarr.scheduler.media/tags)))))
+
 ;; The chain of a media item's ancestors — immediate parent first, up to the
 ;; root — each paired with its loaded item, tags, and scheduler categories, so
 ;; the detail page can surface attributes inherited from parents (e.g. a show's

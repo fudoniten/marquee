@@ -1169,56 +1169,55 @@
    (log-request-failure (str "Failed to load tags for media: " numeric-id) response)
    (assoc-in db [:media-tags numeric-id] [])))
 
+;; Tunarr Scheduler — not Pseudovision — is the source of truth for tags: it
+;; takes Pseudovision's tags, prunes them, regenerates via Tunabrain, and syncs
+;; the result back to Pseudovision. So manual edits are applied in Tunarr
+;; Scheduler (keyed by the item's Jellyfin remote-key, mirroring the category
+;; endpoints); editing tags in Pseudovision instead would get clobbered on the
+;; next sync. Writes go straight to the BFF via ::http-mutate (martian drops
+;; anything the OpenAPI spec doesn't declare); after a change we reload the
+;; scheduler metadata so the tag chips refresh.
+;;   POST   /api/media/{media-id}/tags        {:tags [tag] :source "manual"}
+;;   DELETE /api/media/{media-id}/tags/{tag}
+
+(defn- media-tags-url [remote-key]
+  (str "/api/tunarr-scheduler/api/media/" remote-key "/tags"))
+
 (rf/reg-event-fx
  ::add-media-tag
- (fn [{:keys [db]} [_ numeric-id tag]]
-   (let [k [:add-tag numeric-id tag]]
-     {:db (assoc-in db [:action-states k] {:status :loading})
-      :dispatch [::martian/request
-                 :post-api-media-items-id-tags
-                 {::martian/instance-id :pseudovision
-                  :id numeric-id
-                  :tags [tag]
-                  :source "manual"}
-                 [::add-media-tag-success numeric-id tag]
-                 [::add-media-tag-failure numeric-id tag]]})))
-
-(rf/reg-event-fx
- ::add-media-tag-success
- (fn [{:keys [db]} [_ numeric-id tag _response]]
-   (let [k [:add-tag numeric-id tag]]
-     (update (action-success-fx k (str "Added tag: " tag))
-             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
-
-(rf/reg-event-fx
- ::add-media-tag-failure
- (fn [_ [_ numeric-id tag response]]
-   (action-error-fx [:add-tag numeric-id tag] response)))
+ (fn [{:keys [db]} [_ media-id remote-key tag]]
+   (let [k [:add-tag media-id tag]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (media-tags-url remote-key)
+                     :method     "POST"
+                     :body       {:tags [tag] :source "manual"}
+                     :on-success [::change-media-tag-success media-id remote-key k
+                                  (str "Added tag: " tag)]
+                     :on-failure [::change-media-tag-failure k]}})))
 
 (rf/reg-event-fx
  ::remove-media-tag
- (fn [{:keys [db]} [_ numeric-id tag]]
-   (let [k [:remove-tag numeric-id tag]]
-     {:db (assoc-in db [:action-states k] {:status :loading})
-      :dispatch [::martian/request
-                 :delete-api-media-items-id-tags-tag
-                 {::martian/instance-id :pseudovision
-                  :id numeric-id
-                  :tag tag}
-                 [::remove-media-tag-success numeric-id tag]
-                 [::remove-media-tag-failure numeric-id tag]]})))
+ (fn [{:keys [db]} [_ media-id remote-key tag]]
+   (let [k [:remove-tag media-id tag]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-tags-url remote-key) "/" (js/encodeURIComponent tag))
+                     :method     "DELETE"
+                     :on-success [::change-media-tag-success media-id remote-key k
+                                  (str "Removed tag: " tag)]
+                     :on-failure [::change-media-tag-failure k]}})))
 
 (rf/reg-event-fx
- ::remove-media-tag-success
- (fn [{:keys [db]} [_ numeric-id tag _response]]
-   (let [k [:remove-tag numeric-id tag]]
-     (update (action-success-fx k (str "Removed tag: " tag))
-             :dispatch-n (fnil conj []) [::load-media-tags numeric-id]))))
+ ::change-media-tag-success
+ (fn [_ [_ media-id remote-key k message _status]]
+   ;; Reload scheduler metadata so the (authoritative) Scheduler tags refresh.
+   (update (action-success-fx k message)
+           :dispatch-n (fnil conj []) [::load-scheduler-metadata media-id remote-key])))
 
 (rf/reg-event-fx
- ::remove-media-tag-failure
- (fn [_ [_ numeric-id tag response]]
-   (action-error-fx [:remove-tag numeric-id tag] response)))
+ ::change-media-tag-failure
+ (fn [_ [_ k error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape.
+   (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
 ;; Media category (dimension) management
