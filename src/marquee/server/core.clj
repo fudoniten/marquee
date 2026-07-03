@@ -3,6 +3,7 @@
   (:require [org.httpkit.server :as http]
             [ring.middleware.json :refer [wrap-json-response]]
             [ring.middleware.resource :refer [wrap-resource]]
+            [ring.middleware.content-type :refer [wrap-content-type]]
             [ring.util.response :as resp]
             [clj-http.client :as client]
             [marquee.server.config :as config]
@@ -221,7 +222,14 @@
              ;; `public/` tree before falling through to API/SPA handlers.
              (wrap-resource "public")
              wrap-exception-logging
-             wrap-json-response))
+             wrap-json-response
+             ;; Set Content-Type from the URL extension for static assets.
+             ;; `wrap-resource` returns file bytes without a content type, so
+             ;; without this the ingress's `X-Content-Type-Options: nosniff`
+             ;; makes browsers block /css/main.css and /js/main.js. Applied
+             ;; outermost (last on the response) so it only fills in a type
+             ;; when one isn't already set — API/JSON responses keep theirs.
+             wrap-content-type))
 
 (defn -main [& _] 
   (try
