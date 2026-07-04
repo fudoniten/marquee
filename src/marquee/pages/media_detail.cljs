@@ -608,22 +608,25 @@
         (when (:operator-edited ctx)
           [:span {:class "inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"}
            "Operator edited"])]
-       (cond
-         (nil? wrapper)
+       ;; nil = still loading; otherwise (a loaded map, or `false` on a failed
+       ;; load) we always surface the editors so the operator can add context
+       ;; even when none is stored yet.
+       (if (nil? wrapper)
          [loading-placeholder]
-
-         (false? wrapper)
-         [:p {:class "text-sm text-muted-foreground"}
-          "Grounding context is unavailable for this item."]
-
-         :else
          [:div {:class "space-y-1"}
-          (if ctx
+          (cond
+            ctx
             [:div {:class "rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-sm"}
              [:span {:class "text-muted-foreground"} "Grounded on: "]
              [:span {:class "font-medium"} (display-str (or (:source ctx) "unknown"))]
              (when-let [ts (:updated-at ctx)]
                [:span {:class "text-muted-foreground"} (str " · updated " (display-str ts))])]
+
+            (false? wrapper)
+            [:p {:class "text-sm text-muted-foreground"}
+             "Couldn't load any stored context. You can still add context below — it'll be created on save."]
+
+            :else
             [:p {:class "text-sm text-muted-foreground"}
              "No stored context — grounded by Wikipedia auto-search on the next tagging run."])
 
