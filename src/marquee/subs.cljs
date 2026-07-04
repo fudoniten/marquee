@@ -224,6 +224,15 @@
  (fn [db [_ media-id]]
    (get-in db [:media-categories media-id])))
 
+;; A media item's Tunabrain grounding context, as cached by ::load-media-context
+;; and the context mutations. nil while loading, false on load failure, or a
+;; wrapper map {:context <map|nil>} once loaded (:context is nil when no context
+;; is stored — i.e. the item is grounded by auto-search).
+(rf/reg-sub
+ ::media-context
+ (fn [db [_ media-id]]
+   (get-in db [:media-context media-id])))
+
 (rf/reg-sub
  ::browse-dimension
  (fn [db _]
