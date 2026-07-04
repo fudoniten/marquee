@@ -61,6 +61,7 @@
     :channel-events-loading #{}  ; set of channel-ids currently loading
     :schedule-window-start (.getTime (js/Date.))
     :current-channel-id nil
+    :channel-guidance {}         ; channel-slug → :loading | false | {:guidance <str|nil>}
     ;; Jobs state: jobs are fetched from both Tunarr Scheduler and
     ;; Pseudovision (which now runs its own jobs, e.g. playout generation),
     ;; keyed by source so the two loads don't clobber each other.
@@ -1159,6 +1160,90 @@
  (fn [_ [_ channel-id error]]
    ;; action-error-fx expects a response-shaped map; wrap the fetch error string.
    (action-error-fx [:set-ffmpeg-profile channel-id] {:body {:message error}})))
+
+;; ---------------------------------------------------------------------------
+;; Channel strategic guidance
+;;
+;; Free-text scheduling guidance the operator sets per channel; Tunarr Scheduler
+;; feeds it to whatever builds the channel's playout. Keyed in the scheduler by
+;; the channel's slug — its lower-cased name (e.g. "Spectrum" → "spectrum") —
+;; which is also the {channel} path segment:
+;;   GET /api/scheduling/channels/{channel}/guidance → {:strategic_guidance "..."}
+;;   PUT /api/scheduling/channels/{channel}/guidance   {:strategic_guidance "..."}
+;; Reads/writes go straight to the BFF (not martian): the endpoint isn't in the
+;; generated client, and a plain fetch keeps the JSON key exactly as the
+;; scheduler expects (snake_case, not martian's kebab-case coercion).
+;;
+;; Cache shape under [:channel-guidance slug]:
+;;   absent                → never requested
+;;   :loading              → GET in flight
+;;   false                 → load failed
+;;   {:guidance <str|nil>} → loaded (:guidance nil when none is set yet)
+;; ---------------------------------------------------------------------------
+
+(defn- channel-guidance-url [channel-slug]
+  (str "/api/tunarr-scheduler/api/scheduling/channels/"
+       (js/encodeURIComponent channel-slug) "/guidance"))
+
+(defn- guidance-from-body [body]
+  ;; ::fetch-json keywordizes the raw JSON verbatim, so the snake_case key
+  ;; survives as :strategic_guidance; tolerate a couple of plausible shapes.
+  (or (:strategic_guidance body)
+      (:strategic-guidance body)
+      (get-in body [:guidance :strategic_guidance])))
+
+(rf/reg-event-fx
+ ::load-channel-guidance
+ (fn [{:keys [db]} [_ channel-slug]]
+   ;; Once requested (loading / loaded / failed) we don't refetch, so the view
+   ;; can safely trigger the load on render without a dispatch storm.
+   (if (or (nil? channel-slug) (contains? (:channel-guidance db) channel-slug))
+     {:db db}
+     {:db          (assoc-in db [:channel-guidance channel-slug] :loading)
+      ::fetch-json {:url         (channel-guidance-url channel-slug)
+                    :keywordize? true
+                    :on-success  [::load-channel-guidance-success channel-slug]
+                    :on-failure  [::load-channel-guidance-failure channel-slug]}})))
+
+(rf/reg-event-db
+ ::load-channel-guidance-success
+ (fn [db [_ channel-slug body]]
+   (assoc-in db [:channel-guidance channel-slug] {:guidance (guidance-from-body body)})))
+
+(rf/reg-event-db
+ ::load-channel-guidance-failure
+ (fn [db [_ channel-slug error]]
+   ;; A missing guidance endpoint / no stored guidance just leaves the editor
+   ;; empty, so keep this quiet rather than error-logging.
+   (js/console.debug "Could not load guidance for channel" channel-slug ":" error)
+   (assoc-in db [:channel-guidance channel-slug] false)))
+
+(rf/reg-event-fx
+ ::set-channel-guidance
+ (fn [{:keys [db]} [_ channel-slug guidance]]
+   (let [k [:channel-guidance channel-slug]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (channel-guidance-url channel-slug)
+                     :method     "PUT"
+                     :body       {:strategic_guidance guidance}
+                     :on-success [::store-channel-guidance channel-slug k
+                                  (if (seq guidance) "Guidance saved" "Guidance cleared")
+                                  guidance]
+                     :on-failure [::change-channel-guidance-failure k]}})))
+
+(rf/reg-event-fx
+ ::store-channel-guidance
+ (fn [{:keys [db]} [_ channel-slug k message guidance _response]]
+   ;; The value we sent is authoritative; store it directly so the view updates
+   ;; without a follow-up GET (the PUT response shape isn't relied upon).
+   (assoc (action-success-fx k message)
+          :db (assoc-in db [:channel-guidance channel-slug] {:guidance (not-empty guidance)}))))
+
+(rf/reg-event-fx
+ ::change-channel-guidance-failure
+ (fn [_ [_ k error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape.
+   (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
 ;; Media tag management

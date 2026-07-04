@@ -314,6 +314,15 @@
    (let [id (:current-channel-id db)]
      (get-in db [:channel-events id]))))
 
+;; A channel's strategic scheduling guidance, keyed by channel slug. nil while
+;; unrequested, :loading in flight, false on load failure, or {:guidance
+;; <str|nil>} once loaded (:guidance nil when none is set). See the
+;; ::load-channel-guidance / ::set-channel-guidance events.
+(rf/reg-sub
+ ::channel-guidance
+ (fn [db [_ channel-slug]]
+   (get-in db [:channel-guidance channel-slug])))
+
 (rf/reg-sub
  ::channel-events-loading-for?
  (fn [db [_ channel-id]]
