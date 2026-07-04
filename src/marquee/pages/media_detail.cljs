@@ -368,6 +368,9 @@
 (def ^:private input-class
   "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
 
+(def ^:private textarea-class
+  "flex w-full min-h-[4rem] rounded-md border border-input bg-background px-2 py-1.5 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
 (defn- tag-editor
   "Editable tags. Tunarr Scheduler is the source of truth for tags — it prunes
    Pseudovision's tags, regenerates them via Tunabrain, and syncs the result
@@ -496,6 +499,163 @@
                        :on-click submit}
                "Set"]])])))))
 
+;;; ── Grounding context ─────────────────────────────────────────────────────────
+
+(defn- link-label
+  "Shorten a URL for a chip, dropping the scheme/`www.` prefix. The full URL is
+   preserved in the chip's title/href."
+  [url]
+  (-> (str url)
+      (str/replace #"^https?://" "")
+      (str/replace #"^www\." "")))
+
+(defn- context-text-block
+  "A context free-text field (summary or note) shown read-only with Edit/Add and
+   Clear affordances. Edit mode seeds a textarea from the current value at the
+   moment it opens, so the draft never drifts out of sync with the store; Save
+   PUTs the value, Clear (or saving an emptied field) DELETEs it."
+  [_]
+  (let [editing? (r/atom false)
+        draft    (r/atom "")]
+    (fn [{:keys [label value placeholder empty-hint on-save on-clear]}]
+      (let [start-edit (fn [] (reset! draft (or value "")) (reset! editing? true))
+            save       (fn []
+                         (let [t (str/trim @draft)]
+                           (cond
+                             (seq t)     (on-save t)
+                             (seq value) (on-clear))
+                           (reset! editing? false)))]
+        [:div {:class "py-2"}
+         [:div {:class "flex items-center justify-between gap-2 mb-1.5"}
+          [:p {:class "text-sm font-medium text-muted-foreground"} label]
+          (when-not @editing?
+            [:div {:class "flex gap-1.5"}
+             [button {:size :sm :variant :outline :on-click start-edit}
+              (if (seq value) "Edit" "Add")]
+             (when (seq value)
+               [button {:size :sm :variant :ghost :on-click #(on-clear)} "Clear"])])]
+         (if @editing?
+           [:div {:class "space-y-2"}
+            [:textarea {:class       textarea-class
+                        :rows        3
+                        :placeholder placeholder
+                        :value       @draft
+                        :on-change   #(reset! draft (.. % -target -value))}]
+            [:div {:class "flex gap-2"}
+             [button {:size :sm :on-click save} "Save"]
+             [button {:size :sm :variant :ghost :on-click #(reset! editing? false)} "Cancel"]]]
+           (if (seq value)
+             [:p {:class "text-sm whitespace-pre-wrap break-words leading-relaxed"} value]
+             [:p {:class "text-xs text-muted-foreground"} empty-hint]))]))))
+
+(defn- context-links-block
+  "Reference links as removable chips plus an add-link input. Wikipedia links are
+   what Tunabrain fetches, so surfacing them makes a wrong match obvious."
+  [_]
+  (let [new-link (r/atom "")]
+    (fn [{:keys [media-id remote-key links]}]
+      (let [add! (fn []
+                   (let [l (str/trim @new-link)]
+                     (when (seq l)
+                       (rf/dispatch [::events/add-media-context-link media-id remote-key l])
+                       (reset! new-link ""))))]
+        [:div {:class "py-2"}
+         [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Links"]
+         (when (seq links)
+           [:div {:class "flex flex-wrap gap-1.5 mb-2"}
+            (for [l links]
+              ^{:key l}
+              [:span {:class "inline-flex items-center gap-1 rounded-full bg-secondary pl-2.5 pr-1 py-0.5 text-xs font-medium text-secondary-foreground max-w-full"}
+               [:a {:href   l
+                    :target "_blank"
+                    :rel    "noopener noreferrer"
+                    :class  "truncate max-w-[16rem] underline-offset-2 hover:text-primary hover:underline"
+                    :title  l}
+                (link-label l)]
+               [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-secondary-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
+                         :title    "Remove"
+                         :on-click #(rf/dispatch [::events/remove-media-context-link media-id remote-key l])}
+                "×"]])])
+         [:div {:class "flex gap-2"}
+          [:input {:type        "text"
+                   :class       input-class
+                   :placeholder "Add link…"
+                   :value       @new-link
+                   :on-change   #(reset! new-link (.. % -target -value))
+                   :on-key-down #(when (= "Enter" (.-key %))
+                                   (.preventDefault %)
+                                   (add!))}]
+          [button {:size     :sm
+                   :variant  :outline
+                   :disabled (str/blank? @new-link)
+                   :on-click add!}
+           "Add"]]]))))
+
+(defn- context-card
+  "Tunabrain grounding context: what grounded this item's tags/categories, and
+   the affordances to correct it. Only shown for items with a remote-key (i.e.
+   reachable in Tunarr Scheduler). After editing, the operator re-runs Retag /
+   Recategorize below to apply the corrected grounding."
+  [media-id remote-key]
+  (let [wrapper @(rf/subscribe [::subs/media-context media-id])
+        ctx     (when (map? wrapper) (:context wrapper))]
+    [card {}
+     [card-content {:class "pt-6"}
+      [:div {:class "space-y-1"}
+       [:div {:class "flex items-center gap-2 mb-1"}
+        [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"}
+         "Grounding context"]
+        (when (:operator-edited ctx)
+          [:span {:class "inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"}
+           "Operator edited"])]
+       (cond
+         (nil? wrapper)
+         [loading-placeholder]
+
+         (false? wrapper)
+         [:p {:class "text-sm text-muted-foreground"}
+          "Grounding context is unavailable for this item."]
+
+         :else
+         [:div {:class "space-y-1"}
+          (if ctx
+            [:div {:class "rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-sm"}
+             [:span {:class "text-muted-foreground"} "Grounded on: "]
+             [:span {:class "font-medium"} (display-str (or (:source ctx) "unknown"))]
+             (when-let [ts (:updated-at ctx)]
+               [:span {:class "text-muted-foreground"} (str " · updated " (display-str ts))])]
+            [:p {:class "text-sm text-muted-foreground"}
+             "No stored context — grounded by Wikipedia auto-search on the next tagging run."])
+
+          [context-text-block
+           {:label       "Summary (grounding — highest precedence)"
+            :value       (:summary ctx)
+            :placeholder "The resolved reference text fed to the model. Pinning this deterministically grounds tagging."
+            :empty-hint  "No summary set."
+            :on-save     #(rf/dispatch [::events/set-media-context-summary media-id remote-key %])
+            :on-clear    #(rf/dispatch [::events/clear-media-context-summary media-id remote-key])}]
+
+          [context-text-block
+           {:label       "Operator note"
+            :value       (:text ctx)
+            :placeholder "Free-form description or notes…"
+            :empty-hint  "No note set."
+            :on-save     #(rf/dispatch [::events/set-media-context-text media-id remote-key %])
+            :on-clear    #(rf/dispatch [::events/clear-media-context-text media-id remote-key])}]
+
+          [context-links-block {:media-id media-id :remote-key remote-key :links (:links ctx)}]
+
+          [:p {:class "text-xs text-muted-foreground border-t border-border/50 pt-2 leading-relaxed"}
+           "Grounding uses the first of summary → note → links, else a fresh Wikipedia auto-search. If a link or note isn't taking effect, a stale summary is likely winning — clear it."]
+
+          (when ctx
+            [:div {:class "pt-1"}
+             [action-btn {:action-key [:context-reset media-id]
+                          :label      "Reset to auto"
+                          :variant    :ghost
+                          :size       :sm
+                          :on-click   #(rf/dispatch [::events/reset-media-context media-id remote-key])}]])])]]]))
+
 ;;; ── Page ────────────────────────────────────────────────────────────────────
 
 (defn page []
@@ -540,4 +700,6 @@
         [hero-section ctx]
         [detail-card ctx]
         [children-section children]
+        (when remote-key
+          [context-card media-id remote-key])
         [curation-card media-id]])]))

@@ -299,10 +299,13 @@
          ;; guide) also hit this handler and don't want the extra requests.
          detail?    (= media-id (:current-media-id db))
          ;; Tunarr Scheduler keys its catalog by Pseudovision's numeric id.
+         ;; Grounding context is only surfaced on the detail page and needs the
+         ;; remote-key, so it's fetched only when both hold.
          dispatches (cond-> [[::load-media-tags numeric-id]]
-                      remote-key              (conj [::load-scheduler-metadata media-id remote-key])
-                      (and detail? parent-id) (conj [::load-media-ancestors parent-id])
-                      detail?                 (conj [::load-media-children media-id]))]
+                      remote-key               (conj [::load-scheduler-metadata media-id remote-key])
+                      (and detail? remote-key) (conj [::load-media-context media-id remote-key])
+                      (and detail? parent-id)  (conj [::load-media-ancestors parent-id])
+                      detail?                  (conj [::load-media-children media-id]))]
      {:db (cond-> (assoc-in db [:media-items media-id] item)
             (not remote-key) (assoc-in [:scheduler-metadata media-id] false))
       :dispatch-n dispatches})))
@@ -1298,6 +1301,152 @@
    ;; ::http-mutate hands us an error string; wrap it in the response shape
    ;; action-error-fx expects.
    (action-error-fx k {:body {:message error}})))
+
+;; ---------------------------------------------------------------------------
+;; Media grounding context
+;;
+;; Tunabrain grounds its tag/category answers on a per-item "context" (a resolved
+;; reference summary, its provenance, and reference links). It's captured
+;; automatically after each run (usually a Wikipedia auto-search), but that can
+;; land on the wrong article — so operators can view and correct it here. Edits
+;; are sticky: once touched they're re-sent to Tunabrain and not overwritten by
+;; an automatic re-tag.
+;;
+;; Like tags/categories, context lives in Tunarr Scheduler keyed by the item's
+;; Jellyfin remote-key (the endpoint resolves external ids), so we go straight to
+;; the BFF. Every mutation returns the full context envelope {:media-id :context}
+;; (context is nil when none is stored), which we cache directly rather than
+;; refetching. Grounding precedence on the next run is summary → text → links,
+;; else a fresh Wikipedia auto-search.
+;;   GET/PUT/DELETE /api/media-item/{media-id}/context
+;;   POST/DELETE    /api/media-item/{media-id}/context/links     {:link ...}
+;;   PUT/DELETE     /api/media-item/{media-id}/context/text      {:text ...}
+;;   PUT/DELETE     /api/media-item/{media-id}/context/summary   {:summary ...}
+;; `media-id` here is the app-db key the context is cached under; `remote-key` is
+;; the path id sent to the scheduler.
+
+(defn- media-item-context-url [remote-key]
+  (str "/api/tunarr-scheduler/api/media-item/" remote-key "/context"))
+
+;; Cache shape under [:media-context media-id]:
+;;   nil            → not loaded yet (loading)
+;;   false          → failed to load
+;;   {:context m}   → loaded; m is the context map, or nil when none is stored.
+;; Wrapping in a map lets "loaded, no context" (a real state — grounded by
+;; auto-search) stay distinct from "still loading".
+
+(rf/reg-event-fx
+ ::load-media-context
+ (fn [{:keys [db]} [_ media-id remote-key]]
+   {:db          db
+    ::fetch-json {:url         (media-item-context-url remote-key)
+                  :keywordize? true
+                  :on-success  [::load-media-context-success media-id]
+                  :on-failure  [::load-media-context-failure media-id]}}))
+
+(rf/reg-event-db
+ ::load-media-context-success
+ (fn [db [_ media-id envelope]]
+   (assoc-in db [:media-context media-id] {:context (:context envelope)})))
+
+(rf/reg-event-db
+ ::load-media-context-failure
+ (fn [db [_ media-id error]]
+   (js/console.debug "Could not load media context for" media-id ":" error)
+   (assoc-in db [:media-context media-id] false)))
+
+;; Shared success handler for every context mutation: the response is the full
+;; envelope, so we replace the cached context wholesale (and flag the action
+;; success + refresh jobs, like the other edit handlers).
+(rf/reg-event-fx
+ ::store-media-context
+ (fn [{:keys [db]} [_ media-id k message envelope]]
+   (assoc (action-success-fx k message)
+          :db (assoc-in db [:media-context media-id] {:context (:context envelope)}))))
+
+(rf/reg-event-fx
+ ::change-media-context-failure
+ (fn [_ [_ k error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape.
+   (action-error-fx k {:body {:message error}})))
+
+(rf/reg-event-fx
+ ::set-media-context-summary
+ (fn [{:keys [db]} [_ media-id remote-key summary]]
+   (let [k [:context-summary media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/summary")
+                     :method     "PUT"
+                     :body       {:summary summary}
+                     :on-success [::store-media-context media-id k "Summary saved"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::clear-media-context-summary
+ (fn [{:keys [db]} [_ media-id remote-key]]
+   (let [k [:context-summary media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/summary")
+                     :method     "DELETE"
+                     :on-success [::store-media-context media-id k "Summary cleared"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::set-media-context-text
+ (fn [{:keys [db]} [_ media-id remote-key text]]
+   (let [k [:context-text media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/text")
+                     :method     "PUT"
+                     :body       {:text text}
+                     :on-success [::store-media-context media-id k "Note saved"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::clear-media-context-text
+ (fn [{:keys [db]} [_ media-id remote-key]]
+   (let [k [:context-text media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/text")
+                     :method     "DELETE"
+                     :on-success [::store-media-context media-id k "Note cleared"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::add-media-context-link
+ (fn [{:keys [db]} [_ media-id remote-key link]]
+   (let [k [:context-link-add media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/links")
+                     :method     "POST"
+                     :body       {:link link}
+                     :on-success [::store-media-context media-id k "Link added"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::remove-media-context-link
+ (fn [{:keys [db]} [_ media-id remote-key link]]
+   ;; NB: this DELETE carries a JSON body — ::http-mutate sends one whenever
+   ;; :body is present, so the scheduler knows which link to drop.
+   (let [k [:context-link-remove media-id link]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str (media-item-context-url remote-key) "/links")
+                     :method     "DELETE"
+                     :body       {:link link}
+                     :on-success [::store-media-context media-id k "Link removed"]
+                     :on-failure [::change-media-context-failure k]}})))
+
+(rf/reg-event-fx
+ ::reset-media-context
+ (fn [{:keys [db]} [_ media-id remote-key]]
+   ;; DELETE the whole context: forget operator edits and let the next run fall
+   ;; back to (and re-capture) a fresh Wikipedia auto-search.
+   (let [k [:context-reset media-id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (media-item-context-url remote-key)
+                     :method     "DELETE"
+                     :on-success [::store-media-context media-id k "Reset to auto-search"]
+                     :on-failure [::change-media-context-failure k]}})))
 
 ;; ---------------------------------------------------------------------------
 ;; Pseudovision triggers
