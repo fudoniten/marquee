@@ -2,7 +2,9 @@
   "Channel schedule views:
    - `grid-page`    — TV-guide-style grid: channels as rows, time as columns
    - `channel-page` — single-channel upcoming schedule as a vertical list"
-  (:require [re-frame.core :as rf]
+  (:require [clojure.string :as str]
+            [re-frame.core :as rf]
+            [reagent.core :as r]
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
@@ -392,6 +394,88 @@
            :error   [:span {:class "text-xs text-destructive"} (or (:message state) "Error")]
            nil)]))))
 
+;; ── Strategic guidance ────────────────────────────────────────────────────────
+
+(def ^:private guidance-textarea-class
+  "flex w-full min-h-[5rem] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+(defn- channel-guidance-slug
+  "Identifier Tunarr Scheduler keys a channel's guidance under: the channel's
+   name in the lower-cased slug form the scheduling endpoints use (e.g.
+   \"Spectrum\" → \"spectrum\"). Adjust here if the scheduler ever keys guidance
+   by a different field."
+  [channel]
+  (some-> (:name channel) str/trim str/lower-case not-empty))
+
+(defn- channel-guidance-card
+  "View and edit a channel's strategic scheduling guidance — free text fed to
+   the scheduler's playout planner. Loads lazily on first render for the channel;
+   like the media-detail context editors, the editor is always offered even when
+   nothing is stored yet or the load failed."
+  [_]
+  (let [editing? (r/atom false)
+        draft    (r/atom "")]
+    (fn [channel]
+      (let [slug    (channel-guidance-slug channel)
+            wrapper @(rf/subscribe [::subs/channel-guidance slug])
+            state   @(rf/subscribe [::subs/action-state [:channel-guidance slug]])
+            saving? (= :loading (:status state))
+            value   (when (map? wrapper) (:guidance wrapper))]
+        ;; Trigger the load once (guarded on nil so this doesn't re-dispatch).
+        (when (and slug (nil? wrapper))
+          (rf/dispatch [::events/load-channel-guidance slug]))
+        (let [start-edit (fn [] (reset! draft (or value "")) (reset! editing? true))
+              save       (fn []
+                           (rf/dispatch [::events/set-channel-guidance slug (str/trim @draft)])
+                           (reset! editing? false))]
+          [card {}
+           [card-content {:class "pt-6 space-y-2"}
+            [:div {:class "flex items-center justify-between gap-2"}
+             [:div {:class "flex items-center gap-2"}
+              [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"}
+               "Scheduling guidance"]
+              (case (:status state)
+                :loading [:span {:class "text-xs text-muted-foreground"} "Saving…"]
+                :success [:span {:class "text-xs text-primary"} "Saved ✓"]
+                :error   [:span {:class "text-xs text-destructive"} (or (:message state) "Error")]
+                nil)]
+             (when (and slug (not @editing?))
+               [:div {:class "flex gap-1.5"}
+                [button {:size :sm :variant :outline :on-click start-edit}
+                 (if (seq value) "Edit" "Add")]
+                (when (seq value)
+                  [button {:size     :sm
+                           :variant  :ghost
+                           :disabled saving?
+                           :on-click #(rf/dispatch [::events/set-channel-guidance slug ""])}
+                   "Clear"])])]
+            (cond
+              (nil? slug)
+              [:p {:class "text-sm text-muted-foreground"}
+               "This channel has no name to key guidance by."]
+
+              @editing?
+              [:div {:class "space-y-2"}
+               [:textarea {:class       guidance-textarea-class
+                           :rows        4
+                           :placeholder "e.g. Air Seinfeld at least twice a week in the evening (primetime). Keep adult content out of the daytime — after 22:00 only."
+                           :value       @draft
+                           :disabled    saving?
+                           :on-change   #(reset! draft (.. % -target -value))}]
+               [:div {:class "flex gap-2"}
+                [button {:size :sm :disabled saving? :on-click save} "Save"]
+                [button {:size :sm :variant :ghost :on-click #(reset! editing? false)} "Cancel"]]]
+
+              (or (nil? wrapper) (= :loading wrapper))
+              [:p {:class "text-sm text-muted-foreground"} "Loading guidance…"]
+
+              (seq value)
+              [:p {:class "text-sm whitespace-pre-wrap break-words leading-relaxed"} value]
+
+              :else
+              [:p {:class "text-sm text-muted-foreground"}
+               "No guidance set. Add strategic guidance to steer how this channel is scheduled."])]])))))
+
 (defn channel-page []
   (let [channel     @(rf/subscribe [::subs/current-channel])
         raw-events  @(rf/subscribe [::subs/current-channel-events])
@@ -433,6 +517,9 @@
 
      (when playout-job
        [playout-generating-banner playout-job])
+
+     (when channel
+       [channel-guidance-card channel])
 
      (cond
        loading?
