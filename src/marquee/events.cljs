@@ -1246,6 +1246,126 @@
    (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
+;; Channel scheduling regeneration (quarterly → monthly → weekly → playout)
+;;
+;; Tunarr Scheduler's periodic tasks are normally triggered by k8s CronJobs
+;; (see its deploy/k8s), but operators need to re-run any stage on demand —
+;; e.g. after editing guidance, or to recover from a bad LLM proposal. All
+;; three POST endpoints accept an optional repeatable ?channel=<config-key>
+;; selector to scope the run to one channel (omitting it runs every
+;; configured channel); we always pass the current channel's slug, the same
+;; lower-cased-name identifier already used for strategic guidance.
+;;
+;; Quarterly and monthly are heavy LLM-backed jobs and return 202 + a job id,
+;; tracked like any other job on the Jobs page (source :tunarr-scheduler,
+;; type :media/scheduling-quarterly / :media/scheduling-monthly). Weekly is a
+;; fast, synchronous grid-expansion step (no LLM call) and returns 200 once
+;; done. As with guidance, these go straight to the BFF rather than through
+;; martian: the endpoints take no body, so there's nothing for martian's
+;; query-schema coercion to drop, but a plain fetch keeps this consistent
+;; with the rest of the scheduling API.
+;; ---------------------------------------------------------------------------
+
+(defn- scheduling-task-url [task channel-slug]
+  (str "/api/tunarr-scheduler/api/scheduling/" (name task)
+       "?channel=" (js/encodeURIComponent channel-slug)))
+
+(rf/reg-event-fx
+ ::trigger-regenerate-quarterly
+ (fn [{:keys [db]} [_ channel-slug]]
+   (let [k [:regenerate-quarterly channel-slug]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (scheduling-task-url :quarterly channel-slug)
+                     :method     "POST"
+                     :on-success [::regenerate-scheduling-success k "Quarterly regeneration started"]
+                     :on-failure [::regenerate-scheduling-failure k]}})))
+
+(rf/reg-event-fx
+ ::trigger-regenerate-monthly
+ (fn [{:keys [db]} [_ channel-slug]]
+   (let [k [:regenerate-monthly channel-slug]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (scheduling-task-url :monthly channel-slug)
+                     :method     "POST"
+                     :on-success [::regenerate-scheduling-success k "Monthly regeneration started"]
+                     :on-failure [::regenerate-scheduling-failure k]}})))
+
+(rf/reg-event-fx
+ ::trigger-regenerate-weekly
+ (fn [{:keys [db]} [_ channel-slug]]
+   (let [k [:regenerate-weekly channel-slug]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (scheduling-task-url :weekly channel-slug)
+                     :method     "POST"
+                     :on-success [::regenerate-scheduling-success k "Weekly schedule regenerated"]
+                     :on-failure [::regenerate-scheduling-failure k]}})))
+
+(rf/reg-event-fx
+ ::regenerate-scheduling-success
+ (fn [_ [_ action-key message _response]]
+   (action-success-fx action-key message)))
+
+(rf/reg-event-fx
+ ::regenerate-scheduling-failure
+ (fn [_ [_ action-key error]]
+   ;; ::http-mutate hands us an error string; wrap it in the response shape.
+   (action-error-fx action-key {:body {:message error}})))
+
+;; ---------------------------------------------------------------------------
+;; Quarterly grid ("outline") — read-only view of the frozen daypart skeleton
+;; and rotation strips Tunabrain generated for a channel's current quarter,
+;; plus the feasibility snapshot it was frozen against. Defaults server-side
+;; to the current quarter/year.
+;;
+;; Cache shape under [:channel-grid slug]:
+;;   absent  → never requested
+;;   :loading → GET in flight
+;;   false   → no frozen grid yet, or the load failed (the endpoint 404s until
+;;             the first quarterly run freezes one — same quiet-failure
+;;             handling as channel guidance, since the common case is simply
+;;             "nothing generated yet")
+;;   {...}   → the GridRecord body: {:channel :quarter :year :version :status
+;;             :grid {:skeleton {:blocks [...]} :strips [...]} :feasibility}
+;; ---------------------------------------------------------------------------
+
+(defn- channel-grid-url [channel-slug]
+  (str "/api/tunarr-scheduler/api/scheduling/channels/"
+       (js/encodeURIComponent channel-slug) "/grid"))
+
+(defn- fetch-channel-grid [db channel-slug]
+  {:db          (assoc-in db [:channel-grid channel-slug] :loading)
+   ::fetch-json {:url         (channel-grid-url channel-slug)
+                 :keywordize? true
+                 :on-success  [::load-channel-grid-success channel-slug]
+                 :on-failure  [::load-channel-grid-failure channel-slug]}})
+
+(rf/reg-event-fx
+ ::load-channel-grid
+ (fn [{:keys [db]} [_ channel-slug]]
+   ;; Loaded lazily once per slug, like guidance; ::reload-channel-grid bypasses
+   ;; this cache guard for an explicit manual refresh.
+   (if (or (nil? channel-slug) (contains? (:channel-grid db) channel-slug))
+     {:db db}
+     (fetch-channel-grid db channel-slug))))
+
+(rf/reg-event-fx
+ ::reload-channel-grid
+ (fn [{:keys [db]} [_ channel-slug]]
+   (when channel-slug
+     (fetch-channel-grid db channel-slug))))
+
+(rf/reg-event-db
+ ::load-channel-grid-success
+ (fn [db [_ channel-slug body]]
+   (assoc-in db [:channel-grid channel-slug] body)))
+
+(rf/reg-event-db
+ ::load-channel-grid-failure
+ (fn [db [_ channel-slug error]]
+   (js/console.debug "Could not load quarterly grid for channel" channel-slug ":" error)
+   (assoc-in db [:channel-grid channel-slug] false)))
+
+;; ---------------------------------------------------------------------------
 ;; Media tag management
 ;; ---------------------------------------------------------------------------
 
