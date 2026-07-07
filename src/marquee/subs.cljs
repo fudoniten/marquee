@@ -323,6 +323,15 @@
  (fn [db [_ channel-slug]]
    (get-in db [:channel-guidance channel-slug])))
 
+;; A channel's frozen quarterly grid ("outline"), keyed by channel slug. nil
+;; while unrequested, :loading in flight, false when there's no frozen grid
+;; yet (or the load failed), or the GridRecord body once loaded. See the
+;; ::load-channel-grid / ::reload-channel-grid events.
+(rf/reg-sub
+ ::channel-grid
+ (fn [db [_ channel-slug]]
+   (get-in db [:channel-grid channel-slug])))
+
 (rf/reg-sub
  ::channel-events-loading-for?
  (fn [db [_ channel-id]]
