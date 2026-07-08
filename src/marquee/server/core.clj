@@ -104,15 +104,30 @@
     (when (seq body-str)
       (println body-str))))
 
+(defn- proxy-target
+  "Absolute backend URL for a proxied request, with the inbound query string
+   re-attached.
+
+   The query string must live in the URL itself: clj-http parses `:url` via
+   `parse-url` and merges the result *over* the request map, so a sibling
+   `:query-string` we pass alongside `:url` is clobbered to nil whenever the
+   target URL has no query component. Embedding it here is the only place it
+   survives — otherwise every proxied request silently loses its params (e.g.
+   `?channel=…` on the scheduling endpoints, which then fans a single-channel
+   regeneration out to *all* channels)."
+  [base path query-string]
+  (str base
+       (if (str/blank? path) "/" path)
+       (when-not (str/blank? query-string) (str "?" query-string))))
+
 (defn- proxy-to-backend [service-id {:keys [url token]} req]
   (let [prefix   (str "/api/" (name service-id))
         path     (subs (:uri req) (count prefix))
-        target   (str url (if (str/blank? path) "/" path))
+        target   (proxy-target url path (:query-string req))
         headers  (cond-> (dissoc (:headers req) "host" "content-length")
                    token (assoc "authorization" (str "Bearer " token)))
         response (client/request {:method          (:request-method req)
                                   :url             target
-                                  :query-string    (:query-string req)
                                   :headers         headers
                                   :body            (:body req)
                                   :as              :stream
@@ -131,12 +146,11 @@
 (defn- proxy-to-jellyfin [req]
   (let [{:keys [url token]} config/jellyfin
         path     (subs (:uri req) (count "/api/jellyfin"))
-        target   (str url (if (str/blank? path) "/" path))
+        target   (proxy-target url path (:query-string req))
         headers  (cond-> (dissoc (:headers req) "host" "content-length")
                    token (assoc "x-emby-token" token))
         response (client/request {:method          (:request-method req)
                                   :url             target
-                                  :query-string    (:query-string req)
                                   :headers         headers
                                   :body            (:body req)
                                   :as              :stream
