@@ -549,11 +549,37 @@
     (sequential? days)  [4 (apply min (map #(get weekday-order (str/lower-case (str %)) 99) days))]
     :else               [5 0]))
 
+(defn- content-nav
+  "The re-frame navigation event for a strip's media_id, or nil when it isn't a
+  linkable reference. `series:`/`movie:` open the referenced item's media-detail
+  page; `random:<category>` opens the tag browse for that category. A bare id or
+  unknown prefix stays plain text."
+  [media_id]
+  (when (string? media_id)
+    (let [[kind ident] (str/split media_id #":" 2)]
+      (when (seq ident)
+        (case kind
+          ("series" "movie") [::events/navigate-to-media-detail ident]
+          "random"           [::events/browse-select-item :tags ident]
+          nil)))))
+
+(defn- outline-content
+  "The strip's content name — its label (e.g. a resolved show title) falling
+  back to the raw media_id — rendered as a link to the referenced item/tag when
+  one can be resolved."
+  [{:keys [media_id label]}]
+  (let [text (or label media_id)]
+    (if-let [nav (content-nav media_id)]
+      [:a {:class    "font-medium cursor-pointer underline-offset-4 hover:underline hover:text-primary"
+           :on-click #(rf/dispatch nav)}
+       text]
+      [:span {:class "font-medium"} text])))
+
 (defn- outline-strip-row [{:keys [start end content priority daypart]}]
-  (let [{:keys [media_id strategy label]} content]
+  (let [{:keys [strategy]} content]
     [:div {:class "flex items-baseline gap-3 flex-wrap py-1 text-sm border-t first:border-0"}
      [:span {:class "font-mono text-xs text-muted-foreground w-28 shrink-0"} (str start "–" end)]
-     [:span {:class "font-medium"} (or label media_id)]
+     [outline-content content]
      (when (seq daypart)
        [:span {:class "text-xs text-muted-foreground border rounded px-1"} daypart])
      (when (seq strategy) [:span {:class "text-xs text-muted-foreground"} strategy])
