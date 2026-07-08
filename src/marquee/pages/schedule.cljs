@@ -507,16 +507,95 @@
    (when (seq genre_focus)
      [:span {:class "text-xs text-muted-foreground"} (str/join ", " genre_focus)])])
 
-(defn- outline-strip-row [{:keys [days start end content priority daypart]}]
-  (let [{:keys [media_id strategy label]} content]
+;; Strips share a clock window across different day patterns (a Weekdays and a
+;; Weekends strip can both start at 07:00 without ever colliding on a real day),
+;; so a flat time sort interleaves them confusingly. Group by day pattern first,
+;; then sort each group along its own broadcast day.
+
+(def ^:private weekday-order
+  {"mon" 0 "tue" 1 "wed" 2 "thu" 3 "fri" 4 "sat" 5 "sun" 6})
+
+(defn- clock->minutes
+  "Parse an \"HH:MM\" clock string to minutes past midnight; nil if unparseable."
+  [s]
+  (when-let [[_ h m] (and (string? s) (re-matches #"(\d{1,2}):(\d{2})" s))]
+    (+ (* 60 (js/parseInt h 10)) (js/parseInt m 10))))
+
+(defn- broadcast-minutes
+  "Minutes from the broadcast-day start, so a group sorts the way its day
+  actually airs — a 06:00 broadcast day runs 06:00 → 06:00, putting the
+  after-midnight strips last rather than first."
+  [start broadcast-start]
+  (let [s (or (clock->minutes start) 0)
+        b (or (clock->minutes broadcast-start) 0)]
+    (mod (- s b) (* 24 60))))
+
+(defn- days-group-key
+  "A hashable grouping key for a strip's :days (an explicit list and any
+  equivalent are collapsed to the same key)."
+  [days]
+  (if (sequential? days) (vec days) days))
+
+(defn- days-sort-key
+  "Ordering for day-pattern groups: the named patterns first in broadcast order
+  (daily, weekdays, weekends), then any other named pattern, then explicit day
+  lists by their earliest weekday."
+  [days]
+  (cond
+    (= days "daily")    [0 0]
+    (= days "weekdays") [1 0]
+    (= days "weekends") [2 0]
+    (string? days)      [3 0]
+    (sequential? days)  [4 (apply min (map #(get weekday-order (str/lower-case (str %)) 99) days))]
+    :else               [5 0]))
+
+(defn- content-nav
+  "The re-frame navigation event for a strip's media_id, or nil when it isn't a
+  linkable reference. `series:`/`movie:` open the referenced item's media-detail
+  page; `random:<category>` opens the tag browse for that category. A bare id or
+  unknown prefix stays plain text."
+  [media_id]
+  (when (string? media_id)
+    (let [[kind ident] (str/split media_id #":" 2)]
+      (when (seq ident)
+        (case kind
+          ("series" "movie") [::events/navigate-to-media-detail ident]
+          "random"           [::events/browse-select-item :tags ident]
+          nil)))))
+
+(defn- outline-content
+  "The strip's content name — its label (e.g. a resolved show title) falling
+  back to the raw media_id — rendered as a link to the referenced item/tag when
+  one can be resolved."
+  [{:keys [media_id label]}]
+  (let [text (or label media_id)]
+    (if-let [nav (content-nav media_id)]
+      [:a {:class    "font-medium cursor-pointer underline-offset-4 hover:underline hover:text-primary"
+           :on-click #(rf/dispatch nav)}
+       text]
+      [:span {:class "font-medium"} text])))
+
+(defn- outline-strip-row [{:keys [start end content priority daypart]}]
+  (let [{:keys [strategy]} content]
     [:div {:class "flex items-baseline gap-3 flex-wrap py-1 text-sm border-t first:border-0"}
      [:span {:class "font-mono text-xs text-muted-foreground w-28 shrink-0"} (str start "–" end)]
-     [:span {:class "text-xs text-muted-foreground w-16 shrink-0"} (outline-days-label days)]
-     [:span {:class "font-medium"} (or label media_id)]
+     [outline-content content]
      (when (seq daypart)
        [:span {:class "text-xs text-muted-foreground border rounded px-1"} daypart])
      (when (seq strategy) [:span {:class "text-xs text-muted-foreground"} strategy])
      (when priority [:span {:class "text-xs text-muted-foreground"} (str "priority " priority)])]))
+
+(defn- outline-strip-groups
+  "Strips grouped by day pattern and ordered for display: groups in
+  `days-sort-key` order, each group's rows sorted along the broadcast day.
+  Returns a seq of [days-value sorted-strips]."
+  [strips broadcast-start]
+  (->> strips
+       (group-by (comp days-group-key :days))
+       (sort-by (fn [[_ [s & _]]] (days-sort-key (:days s))))
+       (map (fn [[_ ss]]
+              [(:days (first ss))
+               (sort-by #(broadcast-minutes (:start %) broadcast-start) ss)]))))
 
 (defn- channel-quarterly-outline [_]
   (fn [channel]
@@ -567,8 +646,14 @@
              [:div
               [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Rotation strips"]
               (if (seq strips)
-                (for [s strips]
-                  ^{:key (:strip_id s)} [outline-strip-row s])
+                (let [bstart (get-in grid [:grid :broadcast_day_start])]
+                  (for [[days ss] (outline-strip-groups strips bstart)]
+                    ^{:key (str (days-group-key days))}
+                    [:div {:class "mb-3 last:mb-0"}
+                     [:div {:class "text-xs font-medium text-foreground mb-0.5"}
+                      (outline-days-label days)]
+                     (for [s ss]
+                       ^{:key (:strip_id s)} [outline-strip-row s])]))
                 [:p {:class "text-sm text-muted-foreground"} "No rotation strips stored."])]
              (when (seq notes)
                [:div
