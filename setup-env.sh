@@ -14,7 +14,12 @@ export TUNARR_SCHEDULER_TOKEN=${TUNARR_SCHEDULER_TOKEN:-}
 export TUNABRAIN_URL=${TUNABRAIN_URL:-https://tunabrain.kube.sea.fudo.link}
 export TUNABRAIN_TOKEN=${TUNABRAIN_TOKEN:-}
 
+# Grout service (filler + long-form non-IMDB media store)
+export GROUT_URL=${GROUT_URL:-https://grout.kube.sea.fudo.link}
+export GROUT_TOKEN=${GROUT_TOKEN:-}
+
 echo "Environment variables set!"
 echo "  PSEUDOVISION_URL=$PSEUDOVISION_URL"
 echo "  TUNARR_SCHEDULER_URL=$TUNARR_SCHEDULER_URL"
 echo "  TUNABRAIN_URL=$TUNABRAIN_URL"
+echo "  GROUT_URL=$GROUT_URL"

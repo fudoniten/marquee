@@ -13,9 +13,15 @@
       (reset! root (rdc/create-root el)))
     (rdc/render @root [views/app])))
 
+;; Backstop so an unreachable/soft-disabled service (whose martian spec never
+;; loads) can't leave the app stuck on the loading screen. Healthy specs load
+;; in well under this, flipping `::subs/api-ready?` via the fast path first.
+(def ^:private api-ready-timeout-ms 8000)
+
 (defn ^:export init []
   (api/bootstrap!)
   (rf/dispatch-sync [::events/initialize-db])
+  (js/setTimeout #(rf/dispatch [::events/force-api-ready]) api-ready-timeout-ms)
   (rf/dispatch [::events/load-collections])
   (rf/dispatch [::events/load-app-config])
   (rf/dispatch-sync [::events/restore-from-url (.. js/window -location -pathname)])

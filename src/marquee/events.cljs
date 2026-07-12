@@ -40,6 +40,14 @@
     :media-page-size 20
     :media-filter ""             ; server-side text search over the selected library
     :media-search-token 0        ; debounce token for the filter input
+    ;; Media-tab source switch: :library (Pseudovision libraries) | :grout.
+    :media-source :library
+    :grout-collections nil       ; nil=loading | :error | vector of directory profiles
+    :grout-collection nil        ; selected collection tag (parent-directory:x), or nil
+    :grout-media {}              ; collection-tag → {:status :items :count} | {:status :loading}
+    :grout-media-page 1
+    :grout-kind nil              ; drill-down filter: nil | "bumper" | "filler" | "program"
+    :grout-filter ""             ; client-side text filter over the current view
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
     :browse-facet :tags          ; :tags | :dimensions
@@ -54,6 +62,10 @@
     :api-selected-service nil
     :api-expanded-ops #{}
     :api-filter ""
+    ;; Backstop for `::subs/api-ready?`: a soft-disabled or unreachable service
+    ;; never loads its martian spec, so a timeout flips readiness to render the
+    ;; app anyway rather than hanging forever on the loading screen.
+    :api-force-ready? false
     ;; Schedule / guide state
     :channels nil
     :channels-loading? false
@@ -119,6 +131,8 @@
                      (when (= page :collections)
                        [[::load-collections]]))]
      (cond-> {:db           (cond-> (assoc db :active-page page)
+                              ;; Top-nav "Media" always lands on the library source.
+                              (= page :media) (assoc :media-source :library)
                               (= page :browse) (assoc :browse-selection nil)
                               (= page :collections) (assoc :current-collection-id nil))
               :push-history (routes/page->path page)}
@@ -141,12 +155,14 @@
 (rf/reg-event-fx
  ::restore-from-url
  (fn [{:keys [db]} [_ path]]
-   (let [{:keys [page media-id channel-id collection-id facet selection]}
+   (let [{:keys [page media-id channel-id collection-id facet selection source]}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
                      (when (= page :home)
                        [[::load-channels] [::load-jobs]])
-                     (when (= page :media)
+                     (when (and (= page :media) (= source :grout))
+                       [[::load-grout-collections]])
+                     (when (and (= page :media) (not= source :grout))
                        [[::load-media-libraries] [::set-media-page 1]])
                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                        [[::select-api-service :pseudovision]])
@@ -170,6 +186,7 @@
                      (when (#{:collections :collection-detail} page)
                        [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
+                    (= page :media)             (assoc :media-source (or source :library))
                     (= page :media-detail)      (assoc :current-media-id media-id)
                     (= page :browse)            (assoc :browse-facet (or facet :tags)
                                                        :browse-media-page 1)
@@ -821,6 +838,109 @@
  (fn [db [_ service-id error]]
    (js/console.error "Failed to load API spec:" (name service-id) error)
    (assoc-in db [:api-specs service-id] {:status :error :error error})))
+
+;; Backstop dispatched on a timer at startup (see marquee.core): forces the app
+;; past the loading gate so an unreachable service can't strand the whole UI.
+(rf/reg-event-db
+ ::force-api-ready
+ (fn [db _]
+   (assoc db :api-force-ready? true)))
+
+;; --- Grout media source ----------------------------------------------------
+;; Grout has its own tag semantics (parent-directory collections, channel and
+;; content-type namespaces), so it gets its own view under the Media tab rather
+;; than sharing the library browser. Data is fetched straight through the BFF
+;; (`/api/grout/...`) with kebab-case keys, matching Grout's JSON convention.
+
+(rf/reg-event-fx
+ ::set-media-source
+ (fn [{:keys [db]} [_ source]]
+   {:db           (assoc db :media-source source :grout-filter "")
+    :push-history (if (= source :grout) "/media/grout" "/media")
+    :dispatch-n   (case source
+                    :grout   [[::load-grout-collections]]
+                    :library [[::load-media-libraries] [::set-media-page 1]]
+                    [])}))
+
+(rf/reg-event-fx
+ ::load-grout-collections
+ (fn [{:keys [db]} _]
+   ;; Only fetch once; the Collections index rarely changes within a session.
+   (if (vector? (:grout-collections db))
+     {:db db}
+     {:db          (assoc db :grout-collections nil)
+      ::fetch-json {:url         "/api/grout/grout/directory-profiles"
+                    :keywordize? true
+                    :on-success  [::load-grout-collections-success]
+                    :on-failure  [::load-grout-collections-failure]}})))
+
+(rf/reg-event-db
+ ::load-grout-collections-success
+ (fn [db [_ resp]]
+   (assoc db :grout-collections (vec (:profiles resp)))))
+
+(rf/reg-event-db
+ ::load-grout-collections-failure
+ (fn [db [_ err]]
+   (js/console.error "Failed to load Grout collections:" err)
+   (assoc db :grout-collections :error)))
+
+(rf/reg-event-fx
+ ::open-grout-collection
+ (fn [{:keys [db]} [_ tag]]
+   {:db       (assoc db :grout-collection tag :grout-media-page 1
+                     :grout-kind nil :grout-filter "")
+    :dispatch [::load-grout-media tag]}))
+
+(rf/reg-event-db
+ ::close-grout-collection
+ (fn [db _]
+   (assoc db :grout-collection nil :grout-filter "")))
+
+;; Loads a generous page of a collection's media and paginates it client-side
+;; (mirrors the Browse page). Grout's query is tag-AND, so we filter by the
+;; collection's parent-directory tag; kind is refined server-side when set.
+(rf/reg-event-fx
+ ::load-grout-media
+ (fn [{:keys [db]} [_ tag]]
+   (let [kind (:grout-kind db)
+         qs   (cond-> (str "tags=" (js/encodeURIComponent tag) "&limit=500&offset=0")
+                kind (str "&kind=" (js/encodeURIComponent kind)))]
+     {:db          (assoc-in db [:grout-media tag] {:status :loading})
+      ::fetch-json {:url         (str "/api/grout/grout/media?" qs)
+                    :keywordize? true
+                    :on-success  [::load-grout-media-success tag]
+                    :on-failure  [::load-grout-media-failure tag]}})))
+
+(rf/reg-event-db
+ ::load-grout-media-success
+ (fn [db [_ tag resp]]
+   (assoc-in db [:grout-media tag] {:status :loaded
+                                    :items  (vec (:items resp))
+                                    :count  (:count resp)})))
+
+(rf/reg-event-db
+ ::load-grout-media-failure
+ (fn [db [_ tag err]]
+   (js/console.error "Failed to load Grout media:" err)
+   (assoc-in db [:grout-media tag] {:status :error :error err})))
+
+(rf/reg-event-fx
+ ::set-grout-kind
+ (fn [{:keys [db]} [_ kind]]
+   (let [tag (:grout-collection db)]
+     (cond-> {:db (assoc db :grout-kind kind :grout-media-page 1)}
+       tag (assoc :dispatch [::load-grout-media tag])))))
+
+(rf/reg-event-db
+ ::set-grout-media-page
+ (fn [db [_ page]]
+   (assoc db :grout-media-page page)))
+
+(rf/reg-event-db
+ ::set-grout-filter
+ (fn [db [_ text]]
+   (assoc db :grout-filter text :grout-media-page 1)))
 
 (rf/reg-event-fx
  ::select-api-service

@@ -3,8 +3,8 @@
 A ClojureScript UI service built with **re-frame + Tailwind + shadcn/ui**,
 compiled by **shadow-cljs**, and packaged with **Nix** as a flake.
 
-This service provides a web interface for managing media from **Pseudovision**
-and **Tunarr Scheduler**, with future support for **Tunabrain**.
+This service provides a web interface for managing media from **Pseudovision**,
+**Tunarr Scheduler**, and **Grout**, with future support for **Tunabrain**.
 
 Dependencies come from two sources, each with its own lockfile for
 reproducible, offline Nix builds:
@@ -65,6 +65,10 @@ export TUNARR_SCHEDULER_TOKEN=your-token-here  # optional
 # Tunabrain (future)
 export TUNABRAIN_URL=https://tunabrain.kube.sea.fudo.link
 export TUNABRAIN_TOKEN=your-token-here  # optional
+
+# Grout (filler + long-form non-IMDB media store)
+export GROUT_URL=https://grout.kube.sea.fudo.link
+export GROUT_TOKEN=your-token-here  # optional
 ```
 
 You can also create a `.envrc` file (for use with [direnv](https://direnv.net/))

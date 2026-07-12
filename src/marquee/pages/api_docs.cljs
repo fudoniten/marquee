@@ -15,7 +15,8 @@
 (def services
   [{:id :pseudovision     :label "Pseudovision"}
    {:id :tunarr-scheduler :label "Tunarr Scheduler"}
-   {:id :tunabrain        :label "Tunabrain"}])
+   {:id :tunabrain        :label "Tunabrain"}
+   {:id :grout            :label "Grout"}])
 
 (def ^:private http-methods
   ["get" "post" "put" "patch" "delete" "head" "options"])

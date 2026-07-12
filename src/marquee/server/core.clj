@@ -79,22 +79,35 @@
       (rewrite-spec service-id spec))))
 
 (defn preload-specs!
-  "Fetches every configured service's spec into the cache. Throws if any fail,
-  with a combined message listing all problems."
+  "Best-effort: warm the spec cache for every *configured* service. Never
+  throws — a service that is unreachable at startup is logged and skipped, and
+  its spec is fetched lazily on first use (see `spec-response`), so a service
+  deployed after Marquee can be browsed without a restart."
   []
-  (let [results (for [[id svc] config/services]
-                  (try
-                    [id (fetch-spec! id svc)]
-                    (catch Exception e
-                      [id e])))
-        errors  (filter #(instance? Throwable (second %)) results)]
-    (when (seq errors)
-      (throw (ex-info (str "Failed to load upstream specs:\n  - "
-                           (str/join "\n  - "
-                                     (for [[id e] errors]
-                                       (str (name id) ": " (.getMessage ^Throwable e)))))
-                      {:errors (into {} (for [[id e] errors] [id (.getMessage ^Throwable e)]))})))
-    (reset! spec-cache (into {} results))))
+  (doseq [[id svc] (config/configured-services)]
+    (try
+      (swap! spec-cache assoc id (fetch-spec! id svc))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println (str "[startup] could not preload " (name id) " spec: "
+                        (.getMessage e) " — will retry on first use")))))))
+
+(defn spec-response
+  "Return the rewritten OpenAPI spec for `service-id`, fetching + caching it
+  lazily on a cache miss. A configured-but-unreachable service yields a 503 the
+  frontend renders as an error state (rather than hanging), and it self-heals
+  once the upstream comes up."
+  [service-id]
+  (if-let [cached (get @spec-cache service-id)]
+    (resp/response cached)
+    (try
+      (let [spec (fetch-spec! service-id (get config/services service-id))]
+        (swap! spec-cache assoc service-id spec)
+        (resp/response spec))
+      (catch Exception e
+        {:status 503
+         :body   {:error (str "Spec for " (name service-id) " unavailable: "
+                              (.getMessage e))}}))))
 
 (defn- log-proxy-error [service-id method target status body-str]
   (binding [*out* *err*]
@@ -202,9 +215,16 @@
       (nil? svc)
       {:status 404 :body {:error (str "Unknown service: " (name sid))}}
 
+      ;; Known service, but no URL configured: soft-disabled, so report 503
+      ;; rather than crashing on a nil upstream URL.
+      (not (config/configured? sid))
+      {:status 503 :body {:error (str (name sid) " not configured ("
+                                      (str/upper-case (str/replace (name sid) "-" "_"))
+                                      "_URL not set)")}}
+
       ;; Serve the rewritten OpenAPI spec to the frontend's martian.
       (re-matches #"/api/[^/]+/openapi\.json" uri)
-      (resp/response (get @spec-cache sid))
+      (spec-response sid)
 
       ;; Proxy everything else through with the auth token added.
       :else
@@ -245,14 +265,14 @@
              ;; when one isn't already set — API/JSON responses keep theirs.
              wrap-content-type))
 
-(defn -main [& _] 
-  (try
-    (config/validate!)
-    (preload-specs!)
-    (catch Exception e
-      (binding [*out* *err*]
-        (println "Startup failed:" (.getMessage e)))
-      (System/exit 1)))
+(defn -main [& _]
+  ;; Soft startup: a missing or unreachable service disables that service but
+  ;; never prevents Marquee from booting.
+  (when-let [missing (seq (config/missing-service-urls))]
+    (binding [*out* *err*]
+      (println (str "[startup] services disabled (no *_URL set): "
+                    (str/join ", " missing)))))
+  (preload-specs!)
   (let [port (Integer/parseInt (or (System/getenv "PORT") "8080"))]
     (http/run-server app {:port port})
     (println (str "Marquee listening on port " port))))
