@@ -7,6 +7,7 @@
             [marquee.pages.media :as media]
             [marquee.pages.media-detail :as media-detail]
             [marquee.pages.browse :as browse]
+            [marquee.pages.grout-detail :as grout-detail]
             [marquee.pages.api-docs :as api-docs]
             [marquee.pages.schedule :as schedule]
             [marquee.pages.jobs :as jobs]
@@ -22,6 +23,7 @@
    :jobs             {:label "Jobs"     :view jobs/page          :show-in-nav true}
    :channel-schedule {:label "Schedule" :view schedule/channel-page :show-in-nav false}
    :media-detail     {:label "Media Detail" :view media-detail/page :show-in-nav false}
+   :grout-detail     {:label "Grout Item" :view grout-detail/page :show-in-nav false}
    :collection-detail {:label "Collection" :view collections/page :show-in-nav false}})
 
 (defn navbar []

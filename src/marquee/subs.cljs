@@ -54,6 +54,9 @@
  (fn [db _]
    (get-in db [:grout-media (:grout-collection db)])))
 
+;; The currently open Grout item detail: {:status … :item …}.
+(rf/reg-sub ::grout-item (fn [db _] (:grout-item db)))
+
 ;; The selected collection's profile (concept name, status, dimensions).
 (rf/reg-sub
  ::grout-selected-collection

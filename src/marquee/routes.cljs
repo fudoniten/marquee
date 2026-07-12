@@ -13,6 +13,9 @@
 (defn media-detail-path [media-id]
   (str "/media/" media-id))
 
+(defn grout-detail-path [id]
+  (str "/media/grout/" id))
+
 (defn channel-path [channel-id]
   (str "/schedule/channel/" channel-id))
 
@@ -34,7 +37,9 @@
      "/browse/dimensions" {:page :browse :facet :dimensions}
     "/api-docs"  {:page :api-docs}
     "/schedule"  {:page :schedule-grid}
-     (or (when-let [[_ id] (re-matches #"/media/(.+)" path)]
+     (or (when-let [[_ id] (re-matches #"/media/grout/(.+)" path)]
+           {:page :grout-detail :media-id id})
+         (when-let [[_ id] (re-matches #"/media/(.+)" path)]
            {:page :media-detail :media-id id})
          (when-let [[_ facet sel] (re-matches #"/browse/(tags|dimensions)(?:/(.+))?" path)]
            {:page      :browse
