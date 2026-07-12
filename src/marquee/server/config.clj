@@ -41,13 +41,22 @@
 (defn- url-env-var [service-id]
   (str (-> service-id name (.replace "-" "_") .toUpperCase) "_URL"))
 
-(defn validate!
-  "Throws if any service is missing its required *_URL env var."
+(defn configured?
+  "True when service `id` has a non-blank URL and can be proxied to."
+  [id]
+  (not (clojure.string/blank? (get-in services [id :url]))))
+
+(defn configured-services
+  "The subset of `services` that have a URL set, as a map."
   []
-  (let [missing (for [[id {:keys [url]}] services
-                      :when (clojure.string/blank? url)]
-                  (url-env-var id))]
-    (when (seq missing)
-      (throw (ex-info (str "Missing required environment variables: "
-                           (clojure.string/join ", " missing))
-                      {:missing (vec missing)})))))
+  (into {} (filter (fn [[id _]] (configured? id)) services)))
+
+(defn missing-service-urls
+  "The `*_URL` env-var names for services that have no URL configured. Soft
+  requirement: a missing URL disables that service rather than failing startup,
+  so Marquee always boots (and a service can be deployed later without a
+  Marquee restart — specs load lazily on first use)."
+  []
+  (vec (for [[id _] services
+             :when (not (configured? id))]
+         (url-env-var id))))

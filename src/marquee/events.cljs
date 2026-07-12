@@ -54,6 +54,10 @@
     :api-selected-service nil
     :api-expanded-ops #{}
     :api-filter ""
+    ;; Backstop for `::subs/api-ready?`: a soft-disabled or unreachable service
+    ;; never loads its martian spec, so a timeout flips readiness to render the
+    ;; app anyway rather than hanging forever on the loading screen.
+    :api-force-ready? false
     ;; Schedule / guide state
     :channels nil
     :channels-loading? false
@@ -821,6 +825,13 @@
  (fn [db [_ service-id error]]
    (js/console.error "Failed to load API spec:" (name service-id) error)
    (assoc-in db [:api-specs service-id] {:status :error :error error})))
+
+;; Backstop dispatched on a timer at startup (see marquee.core): forces the app
+;; past the loading gate so an unreachable service can't strand the whole UI.
+(rf/reg-event-db
+ ::force-api-ready
+ (fn [db _]
+   (assoc db :api-force-ready? true)))
 
 (rf/reg-event-fx
  ::select-api-service

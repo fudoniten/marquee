@@ -24,9 +24,10 @@
 (rf/reg-sub
  ::api-ready?
  (fn [db _]
-   (let [instances (vals (get db :martian.re-frame/martian {}))]
-     (or (empty? instances)
-         (every? (comp boolean :m) instances)))))
+   (or (:api-force-ready? db)          ; startup timeout backstop
+       (let [instances (vals (get db :martian.re-frame/martian {}))]
+         (or (empty? instances)
+             (every? (comp boolean :m) instances))))))
 
 (rf/reg-sub
  ::jellyfin-url
