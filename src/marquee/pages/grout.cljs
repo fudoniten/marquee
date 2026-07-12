@@ -30,7 +30,7 @@
 
 ;;; ── helpers ──────────────────────────────────────────────────────────────
 
-(defn- parse-tag
+(defn parse-tag
   "Split `ns:value` into [namespace value]; [nil tag] when there's no namespace."
   [t]
   (if-let [idx (str/index-of t ":")]
@@ -46,7 +46,30 @@
        (map str/capitalize)
        (str/join " ")))
 
-(defn- format-duration
+(defn- long-form? [kind] (= kind "program"))
+
+(defn- filename-tag-name
+  "The original filename (extension stripped) from an item's `filename:` tag, or
+   nil. grout-cli always adds it, so it's a far better display name than the
+   bare UUID — and Grout deliberately keeps AI out of naming, so this is the
+   right source rather than a generated title."
+  [tags]
+  (some (fn [t]
+          (let [[ns v] (parse-tag t)]
+            (when (and (= ns "filename") (not (str/blank? v)))
+              (str/replace v #"\.[^.]+$" ""))))
+        tags))
+
+(defn display-name
+  "Best available human name for a media item: an explicit name, else the
+   original filename, else a kind-appropriate placeholder, else the id."
+  [{:keys [name tags kind id]}]
+  (or (not-empty name)
+      (filename-tag-name tags)
+      (when (long-form? kind) "Untitled")
+      (str "Item #" id)))
+
+(defn format-duration
   "Milliseconds → `M:SS` (or `H:MM:SS` past an hour)."
   [ms]
   (when (and ms (pos? ms))
@@ -114,17 +137,21 @@
        (when-not (str/blank? channel) [chip (str "channel: " channel) :channel])]]]))
 
 (defn- collections-index [collections filter-text]
-  (let [visible (when (vector? collections)
+  (let [;; Empty collections (no live items) are noise — a profile can outlive
+        ;; the media that created it, or exist before its first upload lands.
+        non-empty (when (vector? collections)
+                    (filterv #(pos? (or (:item-count %) 0)) collections))
+        visible (when non-empty
                   (filterv (fn [{:keys [concept-name tag]}]
                              (or (str/blank? filter-text)
                                  (let [needle (str/lower-case filter-text)]
                                    (or (str/includes? (str/lower-case (str concept-name)) needle)
                                        (str/includes? (str/lower-case (str tag)) needle)))))
-                           collections))]
+                           non-empty))]
     (cond
       (nil? collections)   [:p {:class "text-muted-foreground"} "Loading collections…"]
       (= :error collections) [:p {:class "text-destructive"} "Failed to load Grout collections."]
-      (empty? collections) [:p {:class "text-muted-foreground"} "No collections yet. Upload media with grout-cli --upload-dir."]
+      (empty? non-empty)   [:p {:class "text-muted-foreground"} "No collections yet. Upload media with grout-cli --upload-dir."]
       (empty? visible)     [:p {:class "text-muted-foreground"} "No collections match the filter."]
       :else
       [:div {:class "grid gap-3 sm:grid-cols-2 lg:grid-cols-3"}
@@ -134,14 +161,12 @@
 
 ;;; ── media grid (collection drill-down) ──────────────────────────────────────
 
-(defn- long-form? [kind] (= kind "program"))
-
 (defn- media-card
-  [{:keys [id name description kind channel duration-ms source-url tags]}]
+  [{:keys [id description kind channel duration-ms source-url tags] :as item}]
   [card {:class "flex flex-col"}
    [card-header {:class "pb-2"}
     [card-title {:class "text-base flex items-start justify-between gap-2"}
-     [:span (or name (when (long-form? kind) "Untitled") (str "Item #" id))]
+     [:span {:class "break-words"} (display-name item)]
      (when-let [d (format-duration duration-ms)]
        [:span {:class "shrink-0 font-mono text-xs text-muted-foreground"} d])]
     (when kind
@@ -150,11 +175,14 @@
     (when (and description (long-form? kind))
       [:p {:class "text-sm text-muted-foreground line-clamp-3"} description])
     [descriptive-chips tags channel]]
-   (when (and source-url (long-form? kind))
-     [card-footer {}
+   [card-footer {:class "gap-3"}
+    [button {:size :sm :variant :outline
+             :on-click #(rf/dispatch [::events/navigate-to-grout-detail id])}
+     "View details"]
+    (when (and source-url (long-form? kind))
       [:a {:href source-url :target "_blank" :rel "noopener noreferrer"
-           :class "text-sm text-primary underline"}
-       "Source ↗"]])])
+           :class "text-sm text-primary underline self-center"}
+       "Source ↗"])]])
 
 (defn- kind-filter [active]
   [:div {:class "flex items-center gap-1"}

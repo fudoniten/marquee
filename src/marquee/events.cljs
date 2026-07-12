@@ -48,6 +48,8 @@
     :grout-media-page 1
     :grout-kind nil              ; drill-down filter: nil | "bumper" | "filler" | "program"
     :grout-filter ""             ; client-side text filter over the current view
+    :grout-item nil              ; open item detail: nil | {:status … :item …}
+    :current-grout-id nil
     :jellyfin-url nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
     :browse-facet :tags          ; :tags | :dimensions
@@ -169,6 +171,8 @@
                      (when (= page :media-detail)
                        [[::load-media-item media-id]
                         [::load-browse-facet :dimensions]])
+                     (when (= page :grout-detail)
+                       [[::load-grout-item media-id]])
                      (when (= page :browse)
                        (cond-> [[::load-browse-facet (or facet :tags)]]
                          selection (conj (if (and (= facet :dimensions)
@@ -188,6 +192,7 @@
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media)             (assoc :media-source (or source :library))
                     (= page :media-detail)      (assoc :current-media-id media-id)
+                    (= page :grout-detail)      (assoc :current-grout-id media-id)
                     (= page :browse)            (assoc :browse-facet (or facet :tags)
                                                        :browse-media-page 1)
                     (and (= page :browse) selection (or (not= facet :dimensions) (clojure.string/includes? selection ":")))
@@ -855,7 +860,9 @@
 (rf/reg-event-fx
  ::set-media-source
  (fn [{:keys [db]} [_ source]]
-   {:db           (assoc db :media-source source :grout-filter "")
+   ;; Also lands on the Media page, so this doubles as "back to Grout" from the
+   ;; item detail page (active-page :grout-detail).
+   {:db           (assoc db :active-page :media :media-source source :grout-filter "")
     :push-history (if (= source :grout) "/media/grout" "/media")
     :dispatch-n   (case source
                     :grout   [[::load-grout-collections]]
@@ -941,6 +948,67 @@
  ::set-grout-filter
  (fn [db [_ text]]
    (assoc db :grout-filter text :grout-media-page 1)))
+
+;; --- Grout item detail + delete --------------------------------------------
+
+(rf/reg-event-fx
+ ::navigate-to-grout-detail
+ (fn [{:keys [db]} [_ id]]
+   {:db           (assoc db :active-page :grout-detail :current-grout-id id)
+    :push-history (routes/grout-detail-path id)
+    :dispatch     [::load-grout-item id]}))
+
+(rf/reg-event-fx
+ ::load-grout-item
+ (fn [{:keys [db]} [_ id]]
+   {:db          (assoc db :grout-item {:status :loading})
+    ::fetch-json {:url         (str "/api/grout/grout/media/" id)
+                  :keywordize? true
+                  :on-success  [::load-grout-item-success]
+                  :on-failure  [::load-grout-item-failure]}}))
+
+(rf/reg-event-db
+ ::load-grout-item-success
+ (fn [db [_ item]]
+   (assoc db :grout-item {:status :loaded :item item})))
+
+(rf/reg-event-db
+ ::load-grout-item-failure
+ (fn [db [_ err]]
+   (js/console.error "Failed to load Grout item:" err)
+   (assoc db :grout-item {:status :error :error err})))
+
+;; Soft-delete (supersede): the item drops out of every listing but the file is
+;; kept, so the action is reversible server-side. On success we return to the
+;; Grout source and refresh the affected collection + the catalog counts.
+(rf/reg-event-fx
+ ::delete-grout-item
+ (fn [_ [_ id]]
+   {::http-mutate {:url        (str "/api/grout/grout/media/" id)
+                   :method     "DELETE"
+                   :on-success [::delete-grout-item-success]
+                   :on-failure [::delete-grout-item-failure]}}))
+
+(rf/reg-event-fx
+ ::delete-grout-item-success
+ (fn [{:keys [db]} _]
+   (let [tag (:grout-collection db)]
+     {:db           (-> db
+                        (assoc :active-page :media :media-source :grout)
+                        (dissoc :grout-item :current-grout-id)
+                        ;; Force the catalog + collection media to refetch so
+                        ;; the deleted item and stale counts disappear.
+                        (assoc :grout-collections nil)
+                        (update :grout-media dissoc tag))
+      :push-history "/media/grout"
+      :dispatch-n   (cond-> [[::load-grout-collections]]
+                      tag (conj [::load-grout-media tag]))})))
+
+(rf/reg-event-fx
+ ::delete-grout-item-failure
+ (fn [_ [_ err]]
+   (js/console.error "Failed to delete Grout item:" err)
+   {}))
 
 (rf/reg-event-fx
  ::select-api-service
