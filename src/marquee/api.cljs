@@ -17,7 +17,8 @@
 (def ^:private services
   [:pseudovision
    :tunarr-scheduler
-   :tunabrain])
+   :tunabrain
+   :grout])
 
 (defn bootstrap! []
   (doseq [id services]

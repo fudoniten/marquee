@@ -28,7 +28,10 @@
                       :spec-path (env "TUNARR_SCHEDULER_SPEC_PATH" "/openapi.json")}
    :tunabrain {:url       (url-env "TUNABRAIN_URL")
                :token     (env "TUNABRAIN_TOKEN")
-               :spec-path (env "TUNABRAIN_SPEC_PATH" "/openapi.json")}})
+               :spec-path (env "TUNABRAIN_SPEC_PATH" "/openapi.json")}
+   :grout {:url       (url-env "GROUT_URL")
+           :token     (env "GROUT_TOKEN")
+           :spec-path (env "GROUT_SPEC_PATH" "/openapi.json")}})
 
 ;; Jellyfin is optional and not an OpenAPI-managed service.
 (def jellyfin
