@@ -39,6 +39,30 @@
  (fn [db _]
    (:pseudovision-url db)))
 
+;; Grout media subscriptions
+
+(rf/reg-sub ::media-source     (fn [db _] (:media-source db :library)))
+(rf/reg-sub ::grout-collections (fn [db _] (:grout-collections db)))
+(rf/reg-sub ::grout-collection (fn [db _] (:grout-collection db)))
+(rf/reg-sub ::grout-media-page (fn [db _] (:grout-media-page db 1)))
+(rf/reg-sub ::grout-kind       (fn [db _] (:grout-kind db)))
+(rf/reg-sub ::grout-filter     (fn [db _] (:grout-filter db "")))
+
+;; The loaded media entry for the currently selected collection.
+(rf/reg-sub
+ ::grout-media
+ (fn [db _]
+   (get-in db [:grout-media (:grout-collection db)])))
+
+;; The selected collection's profile (concept name, status, dimensions).
+(rf/reg-sub
+ ::grout-selected-collection
+ (fn [db _]
+   (let [tag (:grout-collection db)
+         cols (:grout-collections db)]
+     (when (vector? cols)
+       (some #(when (= tag (:tag %)) %) cols)))))
+
 ;; Media subscriptions
 
 (rf/reg-sub

@@ -3,6 +3,7 @@
             [re-frame.core :as rf]
             [marquee.events :as events]
             [marquee.subs :as subs]
+            [marquee.pages.grout :as grout]
             [marquee.components.button :refer [button]]
             [marquee.components.action-button :refer [action-btn]]
             [marquee.components.card :refer [card card-header card-title
@@ -92,7 +93,7 @@
        ^{:key (:id item)}
        [media-item-card item])]))
 
-(defn page []
+(defn library-view []
   (let [libraries @(rf/subscribe [::subs/media-libraries])
         selected-library-id @(rf/subscribe [::subs/selected-library-id])
         page-items @(rf/subscribe [::subs/media-page-items])
@@ -112,11 +113,6 @@
                    :else            (= (count page-items) page-size))
         filtering? (not (str/blank? filter-text))]
     [:div {:class "space-y-6"}
-     [:div
-      [:h1 {:class "text-3xl font-bold tracking-tight"} "Media"]
-      [:p {:class "text-muted-foreground"}
-       "Browse media items from Pseudovision."]]
-
      ;; Loading state
      (when (nil? libraries)
        [:p {:class "text-muted-foreground"} "Loading libraries..."])
@@ -211,4 +207,25 @@
            [media-grid page-items]
            (when (or has-next (> current-page 1))
              [pagination-controls current-page total-pages has-next])])])]))
+
+(defn source-switcher [active]
+  [:div {:class "flex items-center gap-1 border-b pb-2"}
+   (for [[src label] [[:library "Library"] [:grout "Grout"]]]
+     ^{:key src}
+     [button {:variant (if (= src active) :secondary :ghost)
+              :size :sm
+              :on-click #(rf/dispatch [::events/set-media-source src])}
+      label])])
+
+(defn page []
+  (let [source @(rf/subscribe [::subs/media-source])]
+    [:div {:class "space-y-6"}
+     [:div
+      [:h1 {:class "text-3xl font-bold tracking-tight"} "Media"]
+      [:p {:class "text-muted-foreground"}
+       "Browse media items from Pseudovision and Grout."]]
+     [source-switcher source]
+     (case source
+       :grout [grout/view]
+       [library-view])]))
 

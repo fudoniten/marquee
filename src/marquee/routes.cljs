@@ -26,8 +26,9 @@
 
 (defn parse-path [path]
   (case path
-    "/"          {:page :home}
-    "/media"     {:page :media}
+    "/"            {:page :home}
+    "/media"       {:page :media :source :library}
+    "/media/grout" {:page :media :source :grout}
      "/browse"    {:page :browse :facet :tags}
      "/browse/tags"       {:page :browse :facet :tags}
      "/browse/dimensions" {:page :browse :facet :dimensions}
