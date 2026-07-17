@@ -17,6 +17,15 @@
  (fn [path]
    (.pushState js/history #js{:marquee-idx (inc (current-history-idx))} "" path)))
 
+;; Update the current entry's URL in place (no new history entry) — used for
+;; within-view state like paging/filtering, so the URL always reflects the view
+;; and a later Back lands on it, without flooding history with one entry per
+;; keystroke or page. Preserves the entry's depth index.
+(rf/reg-fx
+ :replace-history
+ (fn [path]
+   (.replaceState js/history #js{:marquee-idx (current-history-idx)} "" path)))
+
 (rf/reg-fx
  :navigate-back
  (fn [fallback]
@@ -180,15 +189,26 @@
 (rf/reg-event-fx
  ::restore-from-url
  (fn [{:keys [db]} [_ path]]
-   (let [{:keys [page media-id channel-id collection-id facet selection source]}
+   (let [{:keys [page media-id channel-id collection-id facet selection source
+                 library-id page-num collection kind grout-page]
+          q-filter :filter}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
                      (when (= page :home)
                        [[::load-channels] [::load-jobs]])
                      (when (and (= page :media) (= source :grout))
-                       [[::load-grout-collections]])
+                       ;; Load the collections index, and — when the URL names a
+                       ;; collection — its media too (kind/page/filter come off
+                       ;; the db set below, which load-grout-media reads).
+                       (cond-> [[::load-grout-collections]]
+                         collection (conj [::load-grout-media collection])))
                      (when (and (= page :media) (not= source :grout))
-                       [[::load-media-libraries] [::set-media-page 1]])
+                       ;; A library in the URL is restored directly (and loaded at
+                       ;; its saved page); otherwise fall back to auto-selecting
+                       ;; the first library at page 1.
+                       (if library-id
+                         [[::load-media-libraries] [::load-library-items library-id]]
+                         [[::load-media-libraries] [::set-media-page 1]]))
                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                        [[::select-api-service :pseudovision]])
                      (when (= page :media-detail)
@@ -214,6 +234,15 @@
                        [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media)             (assoc :media-source (or source :library))
+                    (and (= page :media) (not= source :grout) library-id)
+                    (assoc :selected-library-id library-id
+                           :media-current-page  (or page-num 1)
+                           :media-filter        (or q-filter ""))
+                    (and (= page :media) (= source :grout))
+                    (assoc :grout-collection collection
+                           :grout-kind       kind
+                           :grout-media-page (or grout-page 1)
+                           :grout-filter     (or q-filter ""))
                     (= page :media-detail)      (assoc :current-media-id media-id)
                     (= page :grout-detail)      (assoc :current-grout-id media-id)
                     (= page :browse)            (assoc :browse-facet (or facet :tags)
@@ -591,14 +620,15 @@
 (rf/reg-event-fx
  ::select-library
  (fn [{:keys [db]} [_ library-id]]
-   {:db       (-> db
-                  (assoc :selected-library-id library-id)
-                  (assoc :media-current-page 1)
-                  (assoc :media-filter "")
-                  (assoc :media-page-items nil)
-                  (assoc :media-total nil)
-                  (assoc :media-has-more nil))
-    :dispatch [::load-library-items library-id]}))
+   {:db              (-> db
+                         (assoc :selected-library-id library-id)
+                         (assoc :media-current-page 1)
+                         (assoc :media-filter "")
+                         (assoc :media-page-items nil)
+                         (assoc :media-total nil)
+                         (assoc :media-has-more nil))
+    :replace-history (routes/media-library-path {:library-id library-id})
+    :dispatch        [::load-library-items library-id]}))
 
 (rf/reg-event-fx
  ::set-media-page
@@ -607,7 +637,11 @@
    ;; reset before any library exists, and select-library handles that load.
    (cond-> {:db (assoc db :media-current-page page)}
      (:selected-library-id db)
-     (assoc :dispatch [::load-library-items (:selected-library-id db)]))))
+     (assoc :dispatch        [::load-library-items (:selected-library-id db)]
+            :replace-history (routes/media-library-path
+                              {:library-id (:selected-library-id db)
+                               :page       page
+                               :filter     (:media-filter db)})))))
 
 (rf/reg-event-fx
  ::set-media-page-size
@@ -637,7 +671,12 @@
    ;; Drop stale debounce timers — only the most recent keystroke fetches.
    (when (and (= token (:media-search-token db))
               (:selected-library-id db))
-     {:dispatch [::load-library-items (:selected-library-id db)]})))
+     {:dispatch        [::load-library-items (:selected-library-id db)]
+      ;; Reflect the applied search in the URL (debounced with the fetch, so the
+      ;; URL isn't rewritten on every keystroke). Page is 1 after a filter change.
+      :replace-history (routes/media-library-path
+                        {:library-id (:selected-library-id db)
+                         :filter     (:media-filter db)})})))
 
 ;; ---------------------------------------------------------------------------
 ;; Browse by metadata (Tunarr Scheduler browse endpoints)
@@ -910,8 +949,10 @@
  ::set-media-source
  (fn [{:keys [db]} [_ source]]
    ;; Also lands on the Media page, so this doubles as "back to Grout" from the
-   ;; item detail page (active-page :grout-detail).
-   {:db           (assoc db :active-page :media :media-source source :grout-filter "")
+   ;; item detail page (active-page :grout-detail). Landing on Grout resets the
+   ;; drill-down to the collections index, matching the /media/grout URL pushed.
+   {:db           (cond-> (assoc db :active-page :media :media-source source :grout-filter "")
+                    (= source :grout) (assoc :grout-collection nil :grout-kind nil))
     :push-history (if (= source :grout) "/media/grout" "/media")
     :dispatch-n   (case source
                     :grout   [[::load-grout-collections]]
@@ -944,14 +985,18 @@
 (rf/reg-event-fx
  ::open-grout-collection
  (fn [{:keys [db]} [_ tag]]
-   {:db       (assoc db :grout-collection tag :grout-media-page 1
-                     :grout-kind nil :grout-filter "")
-    :dispatch [::load-grout-media tag]}))
+   ;; Entering a collection is a distinct screen from the index, so push a
+   ;; history entry — browser Back then returns to the collections index.
+   {:db           (assoc db :grout-collection tag :grout-media-page 1
+                         :grout-kind nil :grout-filter "")
+    :push-history (routes/grout-path {:collection tag})
+    :dispatch     [::load-grout-media tag]}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::close-grout-collection
- (fn [db _]
-   (assoc db :grout-collection nil :grout-filter "")))
+ (fn [{:keys [db]} _]
+   {:db              (assoc db :grout-collection nil :grout-filter "")
+    :replace-history (routes/grout-path {})}))
 
 ;; Loads a generous page of a collection's media and paginates it client-side
 ;; (mirrors the Browse page). Grout's query is tag-AND, so we filter by the
@@ -985,18 +1030,27 @@
  ::set-grout-kind
  (fn [{:keys [db]} [_ kind]]
    (let [tag (:grout-collection db)]
-     (cond-> {:db (assoc db :grout-kind kind :grout-media-page 1)}
+     (cond-> {:db              (assoc db :grout-kind kind :grout-media-page 1)
+              :replace-history (routes/grout-path {:collection tag :kind kind
+                                                   :filter (:grout-filter db)})}
        tag (assoc :dispatch [::load-grout-media tag])))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-grout-media-page
- (fn [db [_ page]]
-   (assoc db :grout-media-page page)))
+ (fn [{:keys [db]} [_ page]]
+   {:db              (assoc db :grout-media-page page)
+    :replace-history (routes/grout-path {:collection (:grout-collection db)
+                                         :kind       (:grout-kind db)
+                                         :page       page
+                                         :filter     (:grout-filter db)})}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-grout-filter
- (fn [db [_ text]]
-   (assoc db :grout-filter text :grout-media-page 1)))
+ (fn [{:keys [db]} [_ text]]
+   {:db              (assoc db :grout-filter text :grout-media-page 1)
+    :replace-history (routes/grout-path {:collection (:grout-collection db)
+                                         :kind       (:grout-kind db)
+                                         :filter     text})}))
 
 ;; --- Grout item detail + delete --------------------------------------------
 
