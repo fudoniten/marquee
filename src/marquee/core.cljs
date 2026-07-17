@@ -18,15 +18,27 @@
 ;; in well under this, flipping `::subs/api-ready?` via the fast path first.
 (def ^:private api-ready-timeout-ms 8000)
 
+;; The current in-app URL, path + query — the query carries list state (selected
+;; library, page, filter; grout collection/kind/page) that restore-from-url reads.
+(defn- current-url []
+  (str (.. js/window -location -pathname)
+       (.. js/window -location -search)))
+
+;; Stamp the entry the app first loaded on as depth 0, so the in-page "← Back"
+;; can distinguish it from entries we pushed while navigating (see :push-history).
+(defn- stamp-history-root! []
+  (.replaceState js/history #js{:marquee-idx 0} "" (current-url)))
+
 (defn ^:export init []
   (api/bootstrap!)
   (rf/dispatch-sync [::events/initialize-db])
   (js/setTimeout #(rf/dispatch [::events/force-api-ready]) api-ready-timeout-ms)
   (rf/dispatch [::events/load-collections])
   (rf/dispatch [::events/load-app-config])
-  (rf/dispatch-sync [::events/restore-from-url (.. js/window -location -pathname)])
+  (stamp-history-root!)
+  (rf/dispatch-sync [::events/restore-from-url (current-url)])
   (.addEventListener js/window "popstate"
-    (fn [_] (rf/dispatch [::events/restore-from-url (.. js/window -location -pathname)])))
+    (fn [_] (rf/dispatch [::events/restore-from-url (current-url)])))
   (mount!))
 
 ;; Called by shadow-cljs after each hot reload.

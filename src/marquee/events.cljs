@@ -4,10 +4,42 @@
             [martian.re-frame :as martian]
             [marquee.routes :as routes]))
 
+;; Each pushed entry carries a `marquee-idx` — its depth from the entry the app
+;; was first loaded on (stamped 0 by `stamp-history-root!` at init). It lets the
+;; in-page "← Back" tell an in-app history entry (idx > 0, safe to `history.back`)
+;; from the first-loaded/deep-linked entry (idx 0, where Back would leave the app
+;; and we fall back to a sensible in-app destination instead).
+(defn- current-history-idx []
+  (or (some-> js/history .-state (aget "marquee-idx")) 0))
+
 (rf/reg-fx
  :push-history
  (fn [path]
-   (.pushState js/history nil "" path)))
+   (.pushState js/history #js{:marquee-idx (inc (current-history-idx))} "" path)))
+
+;; Update the current entry's URL in place (no new history entry) — used for
+;; within-view state like paging/filtering, so the URL always reflects the view
+;; and a later Back lands on it, without flooding history with one entry per
+;; keystroke or page. Preserves the entry's depth index.
+(rf/reg-fx
+ :replace-history
+ (fn [path]
+   (.replaceState js/history #js{:marquee-idx (current-history-idx)} "" path)))
+
+(rf/reg-fx
+ :navigate-back
+ (fn [fallback]
+   (if (pos? (current-history-idx))
+     (.back js/history)
+     (when fallback (rf/dispatch fallback)))))
+
+;; Go back to the previous in-app view when there is one, else dispatch
+;; `fallback`. Used by detail-page "← Back" buttons so they return to wherever
+;; you came from (Browse, the guide, a media list) rather than a fixed tab.
+(rf/reg-event-fx
+ ::navigate-back
+ (fn [_ [_ fallback]]
+   {:navigate-back fallback}))
 
 ;; The raw cljs-http response map prints as an opaque CLJS object in the
 ;; browser console, so surface the status and body readably instead.
@@ -157,15 +189,26 @@
 (rf/reg-event-fx
  ::restore-from-url
  (fn [{:keys [db]} [_ path]]
-   (let [{:keys [page media-id channel-id collection-id facet selection source]}
+   (let [{:keys [page media-id channel-id collection-id facet selection source
+                 library-id page-num collection kind grout-page]
+          q-filter :filter}
          (or (routes/parse-path path) {:page :home})
          dispatches (concat
                      (when (= page :home)
                        [[::load-channels] [::load-jobs]])
                      (when (and (= page :media) (= source :grout))
-                       [[::load-grout-collections]])
+                       ;; Load the collections index, and — when the URL names a
+                       ;; collection — its media too (kind/page/filter come off
+                       ;; the db set below, which load-grout-media reads).
+                       (cond-> [[::load-grout-collections]]
+                         collection (conj [::load-grout-media collection])))
                      (when (and (= page :media) (not= source :grout))
-                       [[::load-media-libraries] [::set-media-page 1]])
+                       ;; A library in the URL is restored directly (and loaded at
+                       ;; its saved page); otherwise fall back to auto-selecting
+                       ;; the first library at page 1.
+                       (if library-id
+                         [[::load-media-libraries] [::load-library-items library-id]]
+                         [[::load-media-libraries] [::set-media-page 1]]))
                      (when (and (= page :api-docs) (nil? (:api-selected-service db)))
                        [[::select-api-service :pseudovision]])
                      (when (= page :media-detail)
@@ -191,6 +234,15 @@
                        [[::load-collections]]))]
      (cond-> {:db (cond-> (assoc db :active-page page)
                     (= page :media)             (assoc :media-source (or source :library))
+                    (and (= page :media) (not= source :grout) library-id)
+                    (assoc :selected-library-id library-id
+                           :media-current-page  (or page-num 1)
+                           :media-filter        (or q-filter ""))
+                    (and (= page :media) (= source :grout))
+                    (assoc :grout-collection collection
+                           :grout-kind       kind
+                           :grout-media-page (or grout-page 1)
+                           :grout-filter     (or q-filter ""))
                     (= page :media-detail)      (assoc :current-media-id media-id)
                     (= page :grout-detail)      (assoc :current-grout-id media-id)
                     (= page :browse)            (assoc :browse-facet (or facet :tags)
@@ -346,20 +398,46 @@
 ;; skipped so navigating between siblings doesn't refetch the shared chain.
 (rf/reg-event-fx
  ::load-media-ancestors
- (fn [{:keys [db]} [_ parent-id]]
-   (if (or (nil? parent-id) (contains? (:media-items db) parent-id))
-     {:db db}
-     {:db db
-      :dispatch [::martian/request
-                 :get-api-media-items-id
-                 {::martian/instance-id :pseudovision
-                  :id parent-id}
-                 [::load-media-ancestors-success parent-id]
-                 [::load-media-ancestors-failure parent-id]]})))
+ (fn [{:keys [db]} [_ parent-id visited]]
+   ;; Walk the parent chain, loading whatever each ancestor is *missing* — its
+   ;; item, tags and scheduler metadata — and always recursing to the next
+   ;; parent. Guarding only on item-presence (as this did before) meant a
+   ;; name-only cache left by ::ensure-media-item (the guide's name resolver)
+   ;; was mistaken for "fully loaded", so inherited tags stayed empty until a
+   ;; reload blew the cache away. `visited` guarantees termination on any cycle.
+   (let [visited (or visited #{})
+         cached  (get (:media-items db) parent-id)]
+     (cond
+       (or (nil? parent-id) (contains? visited parent-id))
+       {:db db}
+
+       ;; Not cached (or a prior failure stored as false): fetch it; the success
+       ;; handler loads tags/metadata and walks on to the next parent.
+       (not (map? cached))
+       {:dispatch [::martian/request
+                   :get-api-media-items-id
+                   {::martian/instance-id :pseudovision
+                    :id parent-id}
+                   [::load-media-ancestors-success parent-id visited]
+                   [::load-media-ancestors-failure parent-id]]}
+
+       ;; Item is cached, but possibly name-only. Load whatever's absent and keep
+       ;; walking so an upstream name-only ancestor gets fixed too.
+       :else
+       (let [numeric-id  (:id cached)
+             remote-key  (:remote-key cached)
+             next-parent (:parent-id cached)]
+         {:dispatch-n (cond-> []
+                        (not (contains? (:media-tags db) numeric-id))
+                        (conj [::load-media-tags numeric-id])
+                        (and remote-key (not (contains? (:scheduler-metadata db) parent-id)))
+                        (conj [::load-scheduler-metadata parent-id remote-key])
+                        next-parent
+                        (conj [::load-media-ancestors next-parent (conj visited parent-id)]))})))))
 
 (rf/reg-event-fx
  ::load-media-ancestors-success
- (fn [{:keys [db]} [_ parent-id response]]
+ (fn [{:keys [db]} [_ parent-id visited response]]
    (let [item        (:body response)
          numeric-id  (:id item)
          remote-key  (:remote-key item)
@@ -367,7 +445,7 @@
      {:db (assoc-in db [:media-items parent-id] item)
       :dispatch-n (cond-> [[::load-media-tags numeric-id]]
                     remote-key  (conj [::load-scheduler-metadata parent-id remote-key])
-                    next-parent (conj [::load-media-ancestors next-parent]))})))
+                    next-parent (conj [::load-media-ancestors next-parent (conj (or visited #{}) parent-id)]))})))
 
 (rf/reg-event-db
  ::load-media-ancestors-failure
@@ -542,14 +620,15 @@
 (rf/reg-event-fx
  ::select-library
  (fn [{:keys [db]} [_ library-id]]
-   {:db       (-> db
-                  (assoc :selected-library-id library-id)
-                  (assoc :media-current-page 1)
-                  (assoc :media-filter "")
-                  (assoc :media-page-items nil)
-                  (assoc :media-total nil)
-                  (assoc :media-has-more nil))
-    :dispatch [::load-library-items library-id]}))
+   {:db              (-> db
+                         (assoc :selected-library-id library-id)
+                         (assoc :media-current-page 1)
+                         (assoc :media-filter "")
+                         (assoc :media-page-items nil)
+                         (assoc :media-total nil)
+                         (assoc :media-has-more nil))
+    :replace-history (routes/media-library-path {:library-id library-id})
+    :dispatch        [::load-library-items library-id]}))
 
 (rf/reg-event-fx
  ::set-media-page
@@ -558,7 +637,11 @@
    ;; reset before any library exists, and select-library handles that load.
    (cond-> {:db (assoc db :media-current-page page)}
      (:selected-library-id db)
-     (assoc :dispatch [::load-library-items (:selected-library-id db)]))))
+     (assoc :dispatch        [::load-library-items (:selected-library-id db)]
+            :replace-history (routes/media-library-path
+                              {:library-id (:selected-library-id db)
+                               :page       page
+                               :filter     (:media-filter db)})))))
 
 (rf/reg-event-fx
  ::set-media-page-size
@@ -588,7 +671,12 @@
    ;; Drop stale debounce timers — only the most recent keystroke fetches.
    (when (and (= token (:media-search-token db))
               (:selected-library-id db))
-     {:dispatch [::load-library-items (:selected-library-id db)]})))
+     {:dispatch        [::load-library-items (:selected-library-id db)]
+      ;; Reflect the applied search in the URL (debounced with the fetch, so the
+      ;; URL isn't rewritten on every keystroke). Page is 1 after a filter change.
+      :replace-history (routes/media-library-path
+                        {:library-id (:selected-library-id db)
+                         :filter     (:media-filter db)})})))
 
 ;; ---------------------------------------------------------------------------
 ;; Browse by metadata (Tunarr Scheduler browse endpoints)
@@ -861,8 +949,10 @@
  ::set-media-source
  (fn [{:keys [db]} [_ source]]
    ;; Also lands on the Media page, so this doubles as "back to Grout" from the
-   ;; item detail page (active-page :grout-detail).
-   {:db           (assoc db :active-page :media :media-source source :grout-filter "")
+   ;; item detail page (active-page :grout-detail). Landing on Grout resets the
+   ;; drill-down to the collections index, matching the /media/grout URL pushed.
+   {:db           (cond-> (assoc db :active-page :media :media-source source :grout-filter "")
+                    (= source :grout) (assoc :grout-collection nil :grout-kind nil))
     :push-history (if (= source :grout) "/media/grout" "/media")
     :dispatch-n   (case source
                     :grout   [[::load-grout-collections]]
@@ -895,14 +985,18 @@
 (rf/reg-event-fx
  ::open-grout-collection
  (fn [{:keys [db]} [_ tag]]
-   {:db       (assoc db :grout-collection tag :grout-media-page 1
-                     :grout-kind nil :grout-filter "")
-    :dispatch [::load-grout-media tag]}))
+   ;; Entering a collection is a distinct screen from the index, so push a
+   ;; history entry — browser Back then returns to the collections index.
+   {:db           (assoc db :grout-collection tag :grout-media-page 1
+                         :grout-kind nil :grout-filter "")
+    :push-history (routes/grout-path {:collection tag})
+    :dispatch     [::load-grout-media tag]}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::close-grout-collection
- (fn [db _]
-   (assoc db :grout-collection nil :grout-filter "")))
+ (fn [{:keys [db]} _]
+   {:db              (assoc db :grout-collection nil :grout-filter "")
+    :replace-history (routes/grout-path {})}))
 
 ;; Loads a generous page of a collection's media and paginates it client-side
 ;; (mirrors the Browse page). Grout's query is tag-AND, so we filter by the
@@ -936,18 +1030,27 @@
  ::set-grout-kind
  (fn [{:keys [db]} [_ kind]]
    (let [tag (:grout-collection db)]
-     (cond-> {:db (assoc db :grout-kind kind :grout-media-page 1)}
+     (cond-> {:db              (assoc db :grout-kind kind :grout-media-page 1)
+              :replace-history (routes/grout-path {:collection tag :kind kind
+                                                   :filter (:grout-filter db)})}
        tag (assoc :dispatch [::load-grout-media tag])))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-grout-media-page
- (fn [db [_ page]]
-   (assoc db :grout-media-page page)))
+ (fn [{:keys [db]} [_ page]]
+   {:db              (assoc db :grout-media-page page)
+    :replace-history (routes/grout-path {:collection (:grout-collection db)
+                                         :kind       (:grout-kind db)
+                                         :page       page
+                                         :filter     (:grout-filter db)})}))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::set-grout-filter
- (fn [db [_ text]]
-   (assoc db :grout-filter text :grout-media-page 1)))
+ (fn [{:keys [db]} [_ text]]
+   {:db              (assoc db :grout-filter text :grout-media-page 1)
+    :replace-history (routes/grout-path {:collection (:grout-collection db)
+                                         :kind       (:grout-kind db)
+                                         :filter     text})}))
 
 ;; --- Grout item detail + delete --------------------------------------------
 
@@ -1009,6 +1112,76 @@
  (fn [_ [_ err]]
    (js/console.error "Failed to delete Grout item:" err)
    {}))
+
+;; --- Grout tag editing + enrichment ----------------------------------------
+;; Grout owns its own tags; there is no Tunarr Scheduler / remote-key indirection
+;; here (Grout items aren't in Jellyfin), so edits go straight to Grout via the
+;; BFF. PATCH replaces the whole tag vector, so add/remove compute the new list
+;; from the loaded item and PATCH it. The response is the full updated Media,
+;; which refreshes the open detail in place; the cached collection listing is
+;; dropped so its chips/counts refetch when next viewed.
+
+(defn- grout-patch-tags-fx [id tags]
+  {::http-mutate {:url        (str "/api/grout/grout/media/" id)
+                  :method     "PATCH"
+                  :body       {:tags tags}
+                  :on-success [::grout-item-updated]
+                  :on-failure [::grout-item-update-failed]}})
+
+(rf/reg-event-fx
+ ::add-grout-tag
+ (fn [{:keys [db]} [_ id tag]]
+   (let [current (vec (get-in db [:grout-item :item :tags] []))
+         next    (if (some #{tag} current) current (conj current tag))]
+     (grout-patch-tags-fx id next))))
+
+(rf/reg-event-fx
+ ::remove-grout-tag
+ (fn [{:keys [db]} [_ id tag]]
+   (let [current (vec (get-in db [:grout-item :item :tags] []))
+         next    (vec (remove #{tag} current))]
+     (grout-patch-tags-fx id next))))
+
+(rf/reg-event-db
+ ::grout-item-updated
+ (fn [db [_ item]]
+   ;; PATCH / enrich return the full updated Media; refresh the open detail and
+   ;; drop the cached collection listing so its grid chips/counts refetch.
+   (let [tag (:grout-collection db)]
+     (cond-> (assoc db :grout-item {:status :loaded :item item})
+       tag (update :grout-media dissoc tag)))))
+
+(rf/reg-event-db
+ ::grout-item-update-failed
+ (fn [db [_ err]]
+   (js/console.error "Failed to update Grout item:" err)
+   db))
+
+(rf/reg-event-fx
+ ::enrich-grout-item
+ (fn [{:keys [db]} [_ id]]
+   (let [k [:grout-enrich id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str "/api/grout/grout/media/" id "/enrich")
+                     :method     "POST"
+                     :on-success [::enrich-grout-item-success k]
+                     :on-failure [::enrich-grout-item-failure k]}})))
+
+(rf/reg-event-fx
+ ::enrich-grout-item-success
+ (fn [{:keys [db]} [_ action-key item]]
+   (let [tag (:grout-collection db)]
+     {:db       (cond-> (assoc db :grout-item {:status :loaded :item item})
+                  tag (update :grout-media dissoc tag))
+      :dispatch [::set-action-state action-key :success "Enriched"]
+      ::timeout {:ms 3000 :dispatch [::clear-action-state action-key]}})))
+
+(rf/reg-event-fx
+ ::enrich-grout-item-failure
+ (fn [_ [_ action-key err]]
+   ;; ::http-mutate hands us an error string; surface it and auto-clear.
+   {:dispatch [::set-action-state action-key :error (str err)]
+    ::timeout {:ms 5000 :dispatch [::clear-action-state action-key]}}))
 
 (rf/reg-event-fx
  ::select-api-service
