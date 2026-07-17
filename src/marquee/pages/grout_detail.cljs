@@ -142,8 +142,8 @@
   (let [entry @(rf/subscribe [::subs/grout-item])]
     [:div {:class "space-y-6"}
      [button {:variant :ghost :size :sm
-              :on-click #(rf/dispatch [::events/set-media-source :grout])}
-      "← Back to Grout"]
+              :on-click #(rf/dispatch [::events/navigate-back [::events/set-media-source :grout]])}
+      "← Back"]
      (case (:status entry)
        :loading [:p {:class "text-muted-foreground"} "Loading item…"]
        :error   [:p {:class "text-destructive"} "Failed to load this item."]

@@ -18,12 +18,19 @@
 ;; in well under this, flipping `::subs/api-ready?` via the fast path first.
 (def ^:private api-ready-timeout-ms 8000)
 
+;; Stamp the entry the app first loaded on as depth 0, so the in-page "← Back"
+;; can distinguish it from entries we pushed while navigating (see :push-history).
+(defn- stamp-history-root! []
+  (.replaceState js/history #js{:marquee-idx 0} ""
+                 (.. js/window -location -pathname)))
+
 (defn ^:export init []
   (api/bootstrap!)
   (rf/dispatch-sync [::events/initialize-db])
   (js/setTimeout #(rf/dispatch [::events/force-api-ready]) api-ready-timeout-ms)
   (rf/dispatch [::events/load-collections])
   (rf/dispatch [::events/load-app-config])
+  (stamp-history-root!)
   (rf/dispatch-sync [::events/restore-from-url (.. js/window -location -pathname)])
   (.addEventListener js/window "popstate"
     (fn [_] (rf/dispatch [::events/restore-from-url (.. js/window -location -pathname)])))

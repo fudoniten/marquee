@@ -705,8 +705,8 @@
      [:div {:class "flex items-center gap-2"}
       [button {:variant :ghost
                :size :sm
-               :on-click #(rf/dispatch [::events/navigate :media])}
-       "← Back to Media"]
+               :on-click #(rf/dispatch [::events/navigate-back [::events/navigate :media]])}
+       "← Back"]
       [:div {:class "flex-1"}]
       (when (and media-item (not not-found?))
         [add-to-collection-dropdown media-id])]

@@ -4,10 +4,33 @@
             [martian.re-frame :as martian]
             [marquee.routes :as routes]))
 
+;; Each pushed entry carries a `marquee-idx` — its depth from the entry the app
+;; was first loaded on (stamped 0 by `stamp-history-root!` at init). It lets the
+;; in-page "← Back" tell an in-app history entry (idx > 0, safe to `history.back`)
+;; from the first-loaded/deep-linked entry (idx 0, where Back would leave the app
+;; and we fall back to a sensible in-app destination instead).
+(defn- current-history-idx []
+  (or (some-> js/history .-state (aget "marquee-idx")) 0))
+
 (rf/reg-fx
  :push-history
  (fn [path]
-   (.pushState js/history nil "" path)))
+   (.pushState js/history #js{:marquee-idx (inc (current-history-idx))} "" path)))
+
+(rf/reg-fx
+ :navigate-back
+ (fn [fallback]
+   (if (pos? (current-history-idx))
+     (.back js/history)
+     (when fallback (rf/dispatch fallback)))))
+
+;; Go back to the previous in-app view when there is one, else dispatch
+;; `fallback`. Used by detail-page "← Back" buttons so they return to wherever
+;; you came from (Browse, the guide, a media list) rather than a fixed tab.
+(rf/reg-event-fx
+ ::navigate-back
+ (fn [_ [_ fallback]]
+   {:navigate-back fallback}))
 
 ;; The raw cljs-http response map prints as an opaque CLJS object in the
 ;; browser console, so surface the status and body readably instead.
