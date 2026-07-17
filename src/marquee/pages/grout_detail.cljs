@@ -54,7 +54,7 @@
                [:button {:class    "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] text-secondary-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors ml-0.5"
                          :title    "Remove"
                          :on-click #(rf/dispatch [::events/remove-grout-tag id t])}
-                "×"])])
+                "×"]])]
            [:p {:class "text-xs text-muted-foreground"} "No tags set."])
          [:div {:class "flex gap-2"}
           [:input {:type        "text"
