@@ -1010,6 +1010,76 @@
    (js/console.error "Failed to delete Grout item:" err)
    {}))
 
+;; --- Grout tag editing + enrichment ----------------------------------------
+;; Grout owns its own tags; there is no Tunarr Scheduler / remote-key indirection
+;; here (Grout items aren't in Jellyfin), so edits go straight to Grout via the
+;; BFF. PATCH replaces the whole tag vector, so add/remove compute the new list
+;; from the loaded item and PATCH it. The response is the full updated Media,
+;; which refreshes the open detail in place; the cached collection listing is
+;; dropped so its chips/counts refetch when next viewed.
+
+(defn- grout-patch-tags-fx [id tags]
+  {::http-mutate {:url        (str "/api/grout/grout/media/" id)
+                  :method     "PATCH"
+                  :body       {:tags tags}
+                  :on-success [::grout-item-updated]
+                  :on-failure [::grout-item-update-failed]}})
+
+(rf/reg-event-fx
+ ::add-grout-tag
+ (fn [{:keys [db]} [_ id tag]]
+   (let [current (vec (get-in db [:grout-item :item :tags] []))
+         next    (if (some #{tag} current) current (conj current tag))]
+     (grout-patch-tags-fx id next))))
+
+(rf/reg-event-fx
+ ::remove-grout-tag
+ (fn [{:keys [db]} [_ id tag]]
+   (let [current (vec (get-in db [:grout-item :item :tags] []))
+         next    (vec (remove #{tag} current))]
+     (grout-patch-tags-fx id next))))
+
+(rf/reg-event-db
+ ::grout-item-updated
+ (fn [db [_ item]]
+   ;; PATCH / enrich return the full updated Media; refresh the open detail and
+   ;; drop the cached collection listing so its grid chips/counts refetch.
+   (let [tag (:grout-collection db)]
+     (cond-> (assoc db :grout-item {:status :loaded :item item})
+       tag (update :grout-media dissoc tag)))))
+
+(rf/reg-event-db
+ ::grout-item-update-failed
+ (fn [db [_ err]]
+   (js/console.error "Failed to update Grout item:" err)
+   db))
+
+(rf/reg-event-fx
+ ::enrich-grout-item
+ (fn [{:keys [db]} [_ id]]
+   (let [k [:grout-enrich id]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str "/api/grout/grout/media/" id "/enrich")
+                     :method     "POST"
+                     :on-success [::enrich-grout-item-success k]
+                     :on-failure [::enrich-grout-item-failure k]}})))
+
+(rf/reg-event-fx
+ ::enrich-grout-item-success
+ (fn [{:keys [db]} [_ action-key item]]
+   (let [tag (:grout-collection db)]
+     {:db       (cond-> (assoc db :grout-item {:status :loaded :item item})
+                  tag (update :grout-media dissoc tag))
+      :dispatch [::set-action-state action-key :success "Enriched"]
+      ::timeout {:ms 3000 :dispatch [::clear-action-state action-key]}})))
+
+(rf/reg-event-fx
+ ::enrich-grout-item-failure
+ (fn [_ [_ action-key err]]
+   ;; ::http-mutate hands us an error string; surface it and auto-clear.
+   {:dispatch [::set-action-state action-key :error (str err)]
+    ::timeout {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+
 (rf/reg-event-fx
  ::select-api-service
  (fn [{:keys [db]} [_ service-id]]
