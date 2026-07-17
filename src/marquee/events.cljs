@@ -346,20 +346,46 @@
 ;; skipped so navigating between siblings doesn't refetch the shared chain.
 (rf/reg-event-fx
  ::load-media-ancestors
- (fn [{:keys [db]} [_ parent-id]]
-   (if (or (nil? parent-id) (contains? (:media-items db) parent-id))
-     {:db db}
-     {:db db
-      :dispatch [::martian/request
-                 :get-api-media-items-id
-                 {::martian/instance-id :pseudovision
-                  :id parent-id}
-                 [::load-media-ancestors-success parent-id]
-                 [::load-media-ancestors-failure parent-id]]})))
+ (fn [{:keys [db]} [_ parent-id visited]]
+   ;; Walk the parent chain, loading whatever each ancestor is *missing* — its
+   ;; item, tags and scheduler metadata — and always recursing to the next
+   ;; parent. Guarding only on item-presence (as this did before) meant a
+   ;; name-only cache left by ::ensure-media-item (the guide's name resolver)
+   ;; was mistaken for "fully loaded", so inherited tags stayed empty until a
+   ;; reload blew the cache away. `visited` guarantees termination on any cycle.
+   (let [visited (or visited #{})
+         cached  (get (:media-items db) parent-id)]
+     (cond
+       (or (nil? parent-id) (contains? visited parent-id))
+       {:db db}
+
+       ;; Not cached (or a prior failure stored as false): fetch it; the success
+       ;; handler loads tags/metadata and walks on to the next parent.
+       (not (map? cached))
+       {:dispatch [::martian/request
+                   :get-api-media-items-id
+                   {::martian/instance-id :pseudovision
+                    :id parent-id}
+                   [::load-media-ancestors-success parent-id visited]
+                   [::load-media-ancestors-failure parent-id]]}
+
+       ;; Item is cached, but possibly name-only. Load whatever's absent and keep
+       ;; walking so an upstream name-only ancestor gets fixed too.
+       :else
+       (let [numeric-id  (:id cached)
+             remote-key  (:remote-key cached)
+             next-parent (:parent-id cached)]
+         {:dispatch-n (cond-> []
+                        (not (contains? (:media-tags db) numeric-id))
+                        (conj [::load-media-tags numeric-id])
+                        (and remote-key (not (contains? (:scheduler-metadata db) parent-id)))
+                        (conj [::load-scheduler-metadata parent-id remote-key])
+                        next-parent
+                        (conj [::load-media-ancestors next-parent (conj visited parent-id)]))})))))
 
 (rf/reg-event-fx
  ::load-media-ancestors-success
- (fn [{:keys [db]} [_ parent-id response]]
+ (fn [{:keys [db]} [_ parent-id visited response]]
    (let [item        (:body response)
          numeric-id  (:id item)
          remote-key  (:remote-key item)
@@ -367,7 +393,7 @@
      {:db (assoc-in db [:media-items parent-id] item)
       :dispatch-n (cond-> [[::load-media-tags numeric-id]]
                     remote-key  (conj [::load-scheduler-metadata parent-id remote-key])
-                    next-parent (conj [::load-media-ancestors next-parent]))})))
+                    next-parent (conj [::load-media-ancestors next-parent (conj (or visited #{}) parent-id)]))})))
 
 (rf/reg-event-db
  ::load-media-ancestors-failure

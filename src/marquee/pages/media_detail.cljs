@@ -166,15 +166,16 @@
   "Field row for the parent item (episode → season → show). `parent-id` is a
    Pseudovision id, so this links to the parent's Marquee detail page rather
    than Jellyfin (the Jellyfin id doesn't exist for a PV id). From the parent's
-   own page you can then follow its Jellyfin link."
-  [parent-id]
+   own page you can then follow its Jellyfin link. `parent-name` is shown as the
+   link label when the parent is already loaded, falling back to the bare id."
+  [parent-id parent-name]
   (when-not (blank-value? parent-id)
     [:div {:class "py-2 grid grid-cols-3 gap-4 border-b border-border/50"}
      [:dt {:class "text-sm font-medium text-muted-foreground"} "Parent"]
      [:dd {:class "text-sm col-span-2"}
       [:button {:class    "underline underline-offset-2 hover:text-primary cursor-pointer"
                 :on-click #(rf/dispatch [::events/navigate-to-media-detail parent-id])}
-       (str parent-id)]]]))
+       (or (not-empty (str parent-name)) (str parent-id))]]]))
 
 (defn- accent-chips
   "Chips rendered in the accent hue, for attributes inherited from a parent so
@@ -213,6 +214,21 @@
            (when-let [kind (:kind item)]
              [:span {:class "ml-2 text-xs text-muted-foreground capitalize"}
               (display-str kind)])]
+          ;; Curate the ancestor in place — recategorising the show from an
+          ;; episode without navigating away. Keyed by the ancestor's id, so it
+          ;; doesn't collide with the current item's own curation buttons.
+          (when (:remote-key item)
+            [:div {:class "flex flex-wrap items-center gap-1.5"}
+             [action-btn {:action-key [:retag id]
+                          :label      "Retag"
+                          :variant    :ghost
+                          :size       :sm
+                          :on-click   #(rf/dispatch [::events/trigger-media-item-retag id])}]
+             [action-btn {:action-key [:recategorize id]
+                          :label      "Recategorize"
+                          :variant    :ghost
+                          :size       :sm
+                          :on-click   #(rf/dispatch [::events/trigger-media-item-recategorize id])}]])
           (when (seq tags)
             [:div
              [:p {:class "text-xs text-muted-foreground mb-1"} "Tags"]
@@ -289,7 +305,8 @@
         [field-row "State"          (:state merged)]
         [field-row "Pseudovision ID" (:id merged)]
         [field-row "Jellyfin ID"    remote-key]
-        [parent-field-row (:parent-id merged)]]
+        [parent-field-row (:parent-id merged)
+         (some (fn [a] (when (= (:id a) (:parent-id merged)) (:name (:item a)))) ancestors)]]
         [:div {:class "py-2"}
          [:p {:class "text-sm font-medium text-muted-foreground mb-1.5"} "Tags"]
          [tag-editor media-id remote-key numeric-id]]
