@@ -2112,7 +2112,7 @@
 
 (defn- library-action-op [action]
   (case action
-    :rescan              :post-api-media-library-rescan
+    :sync-from-pseudovision :post-api-media-library-sync-from-pseudovision
     :retag               :post-api-media-library-retag
     :add-taglines        :post-api-media-library-add-taglines
     :recategorize        :post-api-media-library-recategorize
@@ -2121,7 +2121,7 @@
 
 (defn- library-action-label [action]
   (case action
-    :rescan              "Rescan started"
+    :sync-from-pseudovision "Pseudovision sync started"
     :retag               "Retag started"
     :add-taglines        "Tagline generation started"
     :recategorize        "Recategorization started"
