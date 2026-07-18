@@ -136,13 +136,16 @@
                          :label      "Sync Libraries"
                          :on-click   #(rf/dispatch [::events/trigger-sync-libraries])}]
             [action-btn {:action-key [:scan-library selected-library-id]
-                         :label      "Scan"
+                         :label      "Rescan Jellyfin Library"
+                         :sub-title  "Pull new episodes from Jellyfin into Pseudovision"
                          :on-click   #(rf/dispatch [::events/trigger-scan-library selected-library-id])}]
-            [action-btn {:action-key [:rescan lib-name]
-                         :label      "Rescan"
-                         :on-click   #(rf/dispatch [::events/trigger-library-action :rescan lib-name])}]
+            [action-btn {:action-key [:sync-from-pseudovision lib-name]
+                         :label      "Import missing from Pseudovision"
+                         :sub-title  "Pull media rows from Pseudovision into Tunarr Scheduler"
+                         :on-click   #(rf/dispatch [::events/trigger-library-action :sync-from-pseudovision lib-name])}]
             [action-btn {:action-key [:sync-pseudovision-tags lib-name]
-                         :label      "Sync Tags → Pseudovision"
+                         :label      "Sync catalog tags to Pseudovision"
+                         :sub-title  "Push generated tags from Tunarr Scheduler into Pseudovision"
                          :on-click   #(rf/dispatch [::events/trigger-library-action :sync-pseudovision-tags lib-name])}]]
             [action-group "AI Curation"
              [action-btn {:action-key [:retag-episodes lib-name]

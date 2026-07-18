@@ -6,7 +6,7 @@
             [marquee.components.button :refer [button]]))
 
 (defn action-btn
-  [{:keys [action-key label on-click variant size disabled]}]
+  [{:keys [action-key label sub-title on-click variant size disabled]}]
   (let [{:keys [status message]} @(rf/subscribe [::subs/action-state action-key])
         loading? (= status :loading)]
     [:div {:class "flex flex-col items-start gap-0.5"}
@@ -22,5 +22,7 @@
         :success (or message label)
         :error   "Error"
         label)]
+     (when (and sub-title (not (= status :error)))
+       [:p {:class "text-xs text-muted-foreground max-w-48"} sub-title])
      (when (= status :error)
        [:p {:class "text-xs text-destructive max-w-48 truncate" :title message} message])]))
