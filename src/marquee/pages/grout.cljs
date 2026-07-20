@@ -19,6 +19,7 @@
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
+            [marquee.components.action-button :refer [action-btn]]
             [marquee.components.card :refer [card card-header card-title
                                              card-description card-content
                                              card-footer]]))
@@ -236,6 +237,16 @@
       [:h2 {:class "text-2xl font-semibold"} label]
       (when (:status collection)
         [:div {:class "mt-1"} [status-pill (:status collection)]])]
+     [card {}
+      [card-content {:class "pt-6"}
+       [:div {:class "flex flex-wrap items-center gap-2"}
+        [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"}
+         "Curation"]
+        [action-btn {:action-key [:grout-recategorize (:tag collection)]
+                     :label      "Recategorize"
+                     :on-click   #(rf/dispatch [::events/recategorize-grout-collection (:tag collection) label])}]
+        [:span {:class "text-xs text-muted-foreground"}
+         "Re-derives this directory's channel & tags via Tunabrain and fans them out to every item in it."]]]]
      [kind-filter kind]
      (when (or (seq items) (not (str/blank? filter-text)))
        [:input {:type "search"
