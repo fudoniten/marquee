@@ -1183,6 +1183,46 @@
    {:dispatch [::set-action-state action-key :error (str err)]
     ::timeout {:ms 5000 :dispatch [::clear-action-state action-key]}}))
 
+;; Directory-level recategorization: forces Tunabrain to re-derive the shared
+;; channel/tags profile for a whole `parent-directory:<x>` group and fan it
+;; out to every item carrying that tag (POST /grout/enrich-by-tag/:tag,
+;; force=true — the same call grout-cli's --upload-dir path makes per
+;; directory, mirroring the Jellyfin library page's "Recategorize" action).
+;; Async by default (the server queues it for its periodic worker), so the
+;; response is the profile flipped to `pending`, not fresh tags.
+(rf/reg-event-fx
+ ::recategorize-grout-collection
+ (fn [{:keys [db]} [_ tag concept-name]]
+   (let [k [:grout-recategorize tag]]
+     {:db           (assoc-in db [:action-states k] {:status :loading})
+      ::http-mutate {:url        (str "/api/grout/grout/enrich-by-tag/" (js/encodeURIComponent tag))
+                     :method     "POST"
+                     :body       {:concept-name concept-name :force true}
+                     :on-success [::recategorize-grout-collection-success tag]
+                     :on-failure [::recategorize-grout-collection-failure tag]}})))
+
+(rf/reg-event-fx
+ ::recategorize-grout-collection-success
+ (fn [{:keys [db]} [_ tag profile]]
+   (let [k [:grout-recategorize tag]]
+     {;; Patch the matching collection entry in place so the status pill
+      ;; (index and drill-down) reflects the new `pending` state immediately,
+      ;; without a full reload.
+      :db       (update db :grout-collections
+                        (fn [cols]
+                          (if (vector? cols)
+                            (mapv #(if (= tag (:tag %)) (merge % profile) %) cols)
+                            cols)))
+      :dispatch [::set-action-state k :success "Recategorization queued"]
+      ::timeout {:ms 3000 :dispatch [::clear-action-state k]}})))
+
+(rf/reg-event-fx
+ ::recategorize-grout-collection-failure
+ (fn [_ [_ tag err]]
+   (let [k [:grout-recategorize tag]]
+     {:dispatch [::set-action-state k :error (str err)]
+      ::timeout {:ms 5000 :dispatch [::clear-action-state k]}})))
+
 (rf/reg-event-fx
  ::select-api-service
  (fn [{:keys [db]} [_ service-id]]
