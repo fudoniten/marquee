@@ -39,6 +39,16 @@
  (fn [db _]
    (:pseudovision-url db)))
 
+;; Build identity for the footer: nil fields until /api/config resolves, and
+;; nil forever in local dev (no Nix build step sets GIT_COMMIT/GIT_TIMESTAMP/
+;; VERSION there).
+(rf/reg-sub
+ ::build-info
+ (fn [db _]
+   {:git-commit    (:git-commit db)
+    :git-timestamp (:git-timestamp db)
+    :version       (:version db)}))
+
 ;; Grout media subscriptions
 
 (rf/reg-sub ::media-source     (fn [db _] (:media-source db :library)))

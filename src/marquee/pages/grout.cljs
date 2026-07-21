@@ -336,6 +336,28 @@
    [context-editor tag context]
    [dimension-override-editor tag dimensions locked]])
 
+(defn- manual-override-card
+  "Collapsed by default: most collections never need a manual correction, and
+   showing the editor expanded on every visit pushes the (usually far more
+   relevant) media grid down the page for no reason. Click the header to
+   expand/collapse — local, ephemeral UI state, not persisted across
+   navigation or collections."
+  [collection]
+  (let [open? (r/atom false)]
+    (fn [collection]
+      [card {}
+       [card-header {:class "pb-2 cursor-pointer select-none hover:bg-accent/30 transition-colors rounded-t-lg"
+                     :on-click #(swap! open? not)}
+        [card-title {:class "text-base flex items-center justify-between gap-2"}
+         [:span "Manual override"]
+         [:span {:class "text-muted-foreground text-sm font-normal"} (if @open? "▾" "▸")]]
+        [card-description {}
+         "Correct a wrong classification directly, or give Tunabrain extra grounding notes for its next automatic pass."]]
+       (when @open?
+         [card-content {}
+          [manual-override-editor (:tag collection) (:context collection)
+           (:dimensions collection) (:locked collection)]])])))
+
 (defn- collection-view [collection]
   (let [entry       @(rf/subscribe [::subs/grout-media])
         page        @(rf/subscribe [::subs/grout-media-page])
@@ -378,14 +400,7 @@
                      :on-click   #(rf/dispatch [::events/recategorize-grout-collection (:tag collection) label])}]
         [:span {:class "text-xs text-muted-foreground"}
          "Re-derives this directory's channel & tags via Tunabrain and fans them out to every item in it."]]]]
-     [card {}
-      [card-header {:class "pb-2"}
-       [card-title {:class "text-base"} "Manual override"]
-       [card-description {}
-        "Correct a wrong classification directly, or give Tunabrain extra grounding notes for its next automatic pass."]]
-      [card-content {}
-       [manual-override-editor (:tag collection) (:context collection)
-        (:dimensions collection) (:locked collection)]]]
+     [manual-override-card collection]
      [kind-filter kind]
      (when (or (seq items) (not (str/blank? filter-text)))
        [:input {:type "search"
