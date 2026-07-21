@@ -16,6 +16,7 @@
   drill-down into one collection's media (a `GET /grout/media?tags=<pd>` query)."
   (:require [clojure.string :as str]
             [re-frame.core :as rf]
+            [reagent.core :as r]
             [marquee.events :as events]
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
@@ -207,6 +208,134 @@
      "Next →"]]
    [:div {:class "text-sm text-muted-foreground"} (str "Page " current-page " of " total-pages)]])
 
+;;; ── manual override (context + dimension values) ────────────────────────────
+;; PATCH /grout/directory-profiles/:tag bypasses Tunabrain entirely: an
+;; operator can correct a wrong classification (e.g. reassign a directory of
+;; retro game-ad commercials from goldenreels to toontown/infobytes/galaxy)
+;; and/or hand it grounding notes for its next automatic pass. Saving
+;; dimension values locks the profile server-side against a later
+;; growth-triggered re-enrichment silently overwriting the correction.
+
+(def ^:private input-class
+  "flex h-8 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+;; Tunarr Scheduler's fixed dimension set (kept in sync with Tunabrain's
+;; `_DIMENSION_KEYS` and Grout's static `:dimension-descriptions` config) —
+;; every dimension a profile can carry, shown as a fixed row of inputs rather
+;; than an open-ended "add a dimension" affordance.
+(def ^:private known-dimension-keys ["channel" "audience" "freshness" "season" "time-slot"])
+
+(defn- dims->text-map
+  "A profile's `:dimensions` (keyword-or-string keyed, vector values) as a
+   plain {dim-name-string comma-joined-string} map for editable text inputs,
+   pre-seeded with every known dimension key (blank when unset)."
+  [dimensions]
+  (into {}
+        (map (fn [k] [k (str/join ", " (get dimensions (keyword k)))]))
+        known-dimension-keys))
+
+(defn- text-map->dims
+  "Parse the editable {dim-name comma-string} map back into a `{dim-name
+   [values]}` map: trims and drops blanks, and omits any dimension left
+   entirely empty (clearing a field removes that dimension from the profile,
+   matching the PATCH's full-replace semantics for :dimensions)."
+  [text-map]
+  (into {}
+        (keep (fn [[k v]]
+                (let [values (->> (str/split (or v "") #",")
+                                  (map str/trim)
+                                  (remove str/blank?)
+                                  vec)]
+                  (when (seq values) [k values]))))
+        text-map))
+
+(defn- locked-badge []
+  [:span {:class "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"}
+   "Locked"])
+
+(defn- context-editor
+  "Context text/links, saved independently of dimension values (see
+   manual-override-editor) so adding a grounding note never has the
+   side-effect of re-locking the collection — the PATCH only locks when
+   :dimensions/:tags are actually present in the body, and this section never
+   sends those."
+  [tag context]
+  (let [ctx-text  (r/atom (or (:text context) ""))
+        ctx-links (r/atom (str/join ", " (:links context)))]
+    (fn [tag _context]
+      (let [save-key [:grout-context-save tag]]
+        [:div {:class "space-y-1.5"}
+         [:label {:class "text-xs font-medium text-muted-foreground"} "Context for Tunabrain"]
+         [:textarea {:class (str input-class " h-20 w-full resize-y")
+                     :placeholder "Notes to ground the next classification, e.g. \"these are retro VIDEO GAME ads, not vintage film content\""
+                     :value @ctx-text
+                     :on-change #(reset! ctx-text (.. % -target -value))}]
+         [:input {:type "text"
+                  :class (str input-class " w-full")
+                  :placeholder "Reference links, comma-separated (optional; echoed as text, not fetched)"
+                  :value @ctx-links
+                  :on-change #(reset! ctx-links (.. % -target -value))}]
+         [:div {:class "flex items-center gap-2 pt-1"}
+          [action-btn {:action-key save-key
+                       :label      "Save context"
+                       :on-click   #(rf/dispatch
+                                     [::events/patch-grout-collection tag
+                                      {:context {:text  (str/trim @ctx-text)
+                                                 :links (->> (str/split @ctx-links #",")
+                                                            (map str/trim)
+                                                            (remove str/blank?)
+                                                            vec)}}
+                                      save-key])}]
+          [:span {:class "text-xs text-muted-foreground"}
+           "Used on the next classification pass; doesn't change existing dimensions/tags."]]]))))
+
+(defn- dimension-override-editor
+  "Manual dimension values, saved independently of context (see
+   context-editor above). Saving locks the profile server-side against a
+   later growth-triggered re-enrichment overwriting the correction; Unlock
+   clears that without touching the saved values."
+  [tag dimensions locked]
+  (let [dim-text (r/atom (dims->text-map dimensions))]
+    (fn [tag _dimensions locked]
+      (let [save-key   [:grout-dims-save tag]
+            unlock-key [:grout-override-unlock tag]]
+        [:div {:class "space-y-1.5"}
+         [:label {:class "text-xs font-medium text-muted-foreground"} "Dimension values (comma-separated)"]
+         [:div {:class "grid gap-2 sm:grid-cols-2"}
+          (for [k known-dimension-keys]
+            ^{:key k}
+            [:label {:class "flex flex-col gap-1 text-xs"}
+             [:span {:class "text-muted-foreground"} k]
+             [:input {:type "text"
+                      :class input-class
+                      :placeholder (when (= k "channel") "e.g. toontown, infobytes, galaxy")
+                      :value (get @dim-text k "")
+                      :on-change #(swap! dim-text assoc k (.. % -target -value))}]])]
+         [:div {:class "flex flex-wrap items-center gap-2 pt-1"}
+          [action-btn {:action-key save-key
+                       :label      "Save dimensions"
+                       :on-click   #(rf/dispatch
+                                     [::events/patch-grout-collection tag
+                                      {:dimensions (text-map->dims @dim-text)}
+                                      save-key])}]
+          (if locked
+            [action-btn {:action-key unlock-key
+                         :label      "Unlock"
+                         :variant    :ghost
+                         :on-click   #(rf/dispatch
+                                       [::events/patch-grout-collection tag {:locked false} unlock-key])}]
+            [:span {:class "text-xs text-muted-foreground"}
+             "Saving locks this collection against automatic re-enrichment."])]]))))
+
+(defn- manual-override-editor
+  "Editable panel for a collection's Tunabrain grounding context and
+   dimension values — two independent sections so editing one never has a
+   side effect on the other (see context-editor / dimension-override-editor)."
+  [tag context dimensions locked]
+  [:div {:class "space-y-4"}
+   [context-editor tag context]
+   [dimension-override-editor tag dimensions locked]])
+
 (defn- collection-view [collection]
   (let [entry       @(rf/subscribe [::subs/grout-media])
         page        @(rf/subscribe [::subs/grout-media-page])
@@ -234,7 +363,9 @@
                :on-click #(rf/dispatch [::events/close-grout-collection])}
        "← All collections"]]
      [:div
-      [:h2 {:class "text-2xl font-semibold"} label]
+      [:h2 {:class "text-2xl font-semibold flex items-center gap-2"}
+       label
+       (when (:locked collection) [locked-badge])]
       (when (:status collection)
         [:div {:class "mt-1"} [status-pill (:status collection)]])]
      [card {}
@@ -247,6 +378,14 @@
                      :on-click   #(rf/dispatch [::events/recategorize-grout-collection (:tag collection) label])}]
         [:span {:class "text-xs text-muted-foreground"}
          "Re-derives this directory's channel & tags via Tunabrain and fans them out to every item in it."]]]]
+     [card {}
+      [card-header {:class "pb-2"}
+       [card-title {:class "text-base"} "Manual override"]
+       [card-description {}
+        "Correct a wrong classification directly, or give Tunabrain extra grounding notes for its next automatic pass."]]
+      [card-content {}
+       [manual-override-editor (:tag collection) (:context collection)
+        (:dimensions collection) (:locked collection)]]]
      [kind-filter kind]
      (when (or (seq items) (not (str/blank? filter-text)))
        [:input {:type "search"

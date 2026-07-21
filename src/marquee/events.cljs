@@ -1223,6 +1223,57 @@
      {:dispatch [::set-action-state k :error (str err)]
       ::timeout {:ms 5000 :dispatch [::clear-action-state k]}})))
 
+;; Manual collection override: PATCH /grout/directory-profiles/:tag bypasses
+;; Tunabrain entirely so an operator can hand-correct a wrong classification
+;; (e.g. reassign a directory of retro game-ad commercials from goldenreels to
+;; toontown/infobytes/galaxy) and/or hand it grounding notes for its next
+;; automatic pass. Setting :dimensions/:tags locks the profile server-side
+;; against a later growth-triggered re-enrichment overwriting the correction;
+;; see Grout's grout.http.directory-profiles/patch-handler. One generic event
+;; backs all three UI actions (save context+dimensions, unlock) since they're
+;; all just different bodies to the same endpoint.
+(rf/reg-event-fx
+ ::patch-grout-collection
+ (fn [{:keys [db]} [_ tag patch action-key]]
+   {:db           (assoc-in db [:action-states action-key] {:status :loading})
+    ::http-mutate {:url        (str "/api/grout/grout/directory-profiles/" (js/encodeURIComponent tag))
+                   :method     "PATCH"
+                   :body       patch
+                   ;; `patch` is threaded through to the success handler so it
+                   ;; can tell whether child media needs refetching (only
+                   ;; :dimensions/:tags edits fan out; :context and :locked
+                   ;; alone don't touch grout_media at all).
+                   :on-success [::patch-grout-collection-success tag patch action-key]
+                   :on-failure [::patch-grout-collection-failure action-key]}}))
+
+(rf/reg-event-fx
+ ::patch-grout-collection-success
+ (fn [{:keys [db]} [_ tag patch action-key profile]]
+   (let [refetch-media? (or (contains? patch :dimensions) (contains? patch :tags))]
+     {;; Patch the matching collection entry in place (mirrors
+      ;; recategorize-grout-collection-success) so the index/drill-down
+      ;; reflect the new dimensions/context/locked state immediately, no
+      ;; reload needed.
+      :db       (cond-> (update db :grout-collections
+                                (fn [cols]
+                                  (if (vector? cols)
+                                    (mapv #(if (= tag (:tag %)) (merge % profile) %) cols)
+                                    cols)))
+                  refetch-media? (update :grout-media dissoc tag))
+      ;; Dimensions/tags changes fan out to child media server-side; refetch
+      ;; the (now-uncached) media grid so chips/channels reflect the
+      ;; correction right away instead of only on next visit. Context-only or
+      ;; lock-only saves don't touch grout_media, so skip the extra request.
+      :dispatch-n (cond-> [[::set-action-state action-key :success "Saved"]]
+                    refetch-media? (conj [::load-grout-media tag]))
+      ::timeout {:ms 3000 :dispatch [::clear-action-state action-key]}})))
+
+(rf/reg-event-fx
+ ::patch-grout-collection-failure
+ (fn [_ [_ action-key err]]
+   {:dispatch [::set-action-state action-key :error (str err)]
+    ::timeout {:ms 5000 :dispatch [::clear-action-state action-key]}}))
+
 (rf/reg-event-fx
  ::select-api-service
  (fn [{:keys [db]} [_ service-id]]
