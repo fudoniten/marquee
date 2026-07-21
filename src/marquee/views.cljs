@@ -44,6 +44,42 @@
   [:div {:class "flex items-center justify-center h-screen text-muted-foreground"}
    "Loading…"])
 
+(defn- short-commit
+  "First 7 chars of a git sha, or the value as-is when it's shorter (e.g. Nix's
+   versionInfo falls back to the literal string \"unknown\" when the flake has
+   no `self.rev`/`self.dirtyRev`) — showing that verbatim is more useful than
+   hiding it, since it tells the deployer their build has no git metadata."
+  [commit]
+  (when commit
+    (if (>= (count commit) 7) (.slice commit 0 7) commit)))
+
+(defn- format-build-date
+  "Nix's versionInfo timestamp is a YYYYMMDD string (build date, no
+   time-of-day) — render it as YYYY-MM-DD. Passes through unrecognized
+   shapes (e.g. the \"dev\" fallback used in a flake with no lastModified)
+   unchanged rather than mangling them."
+  [ts]
+  (when ts
+    (if (re-matches #"\d{8}" ts)
+      (str (.slice ts 0 4) "-" (.slice ts 4 6) "-" (.slice ts 6 8))
+      ts)))
+
+(defn footer
+  "Build identity (version tag / commit / build date), so it's obvious from
+   any page whether a given change has actually reached the running
+   deployment — no dedicated /api/version endpoint needed. Renders nothing
+   until /api/config resolves, and nothing at all in local dev (`clojure
+   -M:server`), where GIT_COMMIT/GIT_TIMESTAMP/VERSION are never set."
+  []
+  (let [{:keys [git-commit git-timestamp version]} @(rf/subscribe [::subs/build-info])]
+    (when (or git-commit git-timestamp version)
+      [:footer {:class "mt-12 border-t border-border pt-4 text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1"}
+       (when version [:span version])
+       (when-let [c (short-commit git-commit)]
+         [:span {:title git-commit} (str "commit " c)])
+       (when-let [d (format-build-date git-timestamp)]
+         [:span (str "built " d)])])))
+
 (defn app []
   (let [active  @(rf/subscribe [::subs/active-page])
         ready?  @(rf/subscribe [::subs/api-ready?])
@@ -56,4 +92,5 @@
       [:div {:class "mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-8"}
        [navbar]
        [:main {:class "py-8"}
-        [view]]])))
+        [view]]
+       [footer]])))

@@ -83,6 +83,12 @@
     :grout-item nil              ; open item detail: nil | {:status … :item …}
     :current-grout-id nil
     :jellyfin-url nil
+    ;; Build identity for the footer (see ::load-app-config-success); nil
+    ;; until /api/config resolves, and nil forever in local dev where
+    ;; there's no Nix build step to set GIT_COMMIT/GIT_TIMESTAMP/VERSION.
+    :git-commit nil
+    :git-timestamp nil
+    :version nil
     ;; Browse-by-metadata state (Tunarr Scheduler browse endpoints)
     :browse-facet :tags          ; :tags | :dimensions
     :browse-selection nil        ; selected tag or dimension:value, or nil
@@ -138,7 +144,10 @@
  (fn [db [_ config]]
    (-> db
        (assoc :jellyfin-url     (get config "jellyfin-url"))
-       (assoc :pseudovision-url (get config "pseudovision-url")))))
+       (assoc :pseudovision-url (get config "pseudovision-url"))
+       (assoc :git-commit       (get config "git-commit"))
+       (assoc :git-timestamp    (get config "git-timestamp"))
+       (assoc :version          (get config "version")))))
 
 (rf/reg-event-db
  ::load-app-config-failure
@@ -889,6 +898,12 @@
 ;; Mutating HTTP (PUT/POST/DELETE) through the BFF, for endpoints not modelled
 ;; in martian. Sends `body` as JSON when present and tolerates empty/204
 ;; responses (on-success receives the HTTP status; the body isn't parsed).
+;;
+;; The response body is read and parsed on BOTH success and failure paths: a
+;; 4xx/5xx from a handler that returns a structured `{:error "..."}` body
+;; (e.g. the directory-profile PATCH's dimension-vocabulary validation) needs
+;; that actual message to reach on-failure, not just a generic "HTTP 400 Bad
+;; Request" with the real explanation silently dropped.
 (rf/reg-fx
  ::http-mutate
  (fn [{:keys [url method body on-success on-failure]}]
@@ -897,17 +912,19 @@
                                 (assoc :headers {"Content-Type" "application/json"}
                                        :body (js/JSON.stringify (clj->js body))))))
        (.then (fn [resp]
-                (if (.-ok resp)
-                  ;; Hand the parsed JSON body (keywordized; nil for empty/204
-                  ;; responses) to on-success, so callers can use the server's
-                  ;; post-change state without a follow-up GET.
-                  (.then (.text resp)
-                         (fn [t]
-                           (let [parsed (when-not (or (nil? t) (= t ""))
-                                          (try (js->clj (js/JSON.parse t) :keywordize-keys true)
-                                               (catch :default _ nil)))]
-                             (rf/dispatch (conj on-success parsed)))))
-                  (throw (js/Error. (str "HTTP " (.-status resp) " " (.-statusText resp)))))))
+                (.then (.text resp)
+                       (fn [t]
+                         (let [parsed (when-not (or (nil? t) (= t ""))
+                                        (try (js->clj (js/JSON.parse t) :keywordize-keys true)
+                                             (catch :default _ nil)))]
+                           (if (.-ok resp)
+                             ;; Hand the parsed JSON body (keywordized; nil
+                             ;; for empty/204 responses) to on-success, so
+                             ;; callers can use the server's post-change
+                             ;; state without a follow-up GET.
+                             (rf/dispatch (conj on-success parsed))
+                             (throw (js/Error. (or (:error parsed)
+                                                   (str "HTTP " (.-status resp) " " (.-statusText resp)))))))))))
        (.catch (fn [err] (rf/dispatch (conj on-failure (.-message err))))))))
 
 (rf/reg-event-fx

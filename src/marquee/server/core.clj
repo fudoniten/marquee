@@ -196,10 +196,17 @@
         svc  (and sid (get config/services sid))]
     (cond
       ;; Public config for frontend (service URLs for direct links, e.g.
-      ;; Jellyfin item links and Pseudovision channel playback streams).
+      ;; Jellyfin item links and Pseudovision channel playback streams, plus
+      ;; the build identity so the footer can show what's actually deployed
+      ;; without a dedicated /api/version endpoint). GIT_COMMIT/GIT_TIMESTAMP/
+      ;; VERSION are set on the deploy container by flake.nix's versionInfo;
+      ;; nil in local dev (`clojure -M:server`), where there's no build step.
       (= uri "/api/config")
       (resp/response {:jellyfin-url     (:url config/jellyfin)
-                      :pseudovision-url (get-in config/services [:pseudovision :url])})
+                      :pseudovision-url (get-in config/services [:pseudovision :url])
+                      :git-commit       (System/getenv "GIT_COMMIT")
+                      :git-timestamp    (System/getenv "GIT_TIMESTAMP")
+                      :version          (System/getenv "VERSION")})
 
       ;; Proxy to Jellyfin (images, metadata). Token is added server-side.
       (str/starts-with? uri "/api/jellyfin")
