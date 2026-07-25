@@ -1375,10 +1375,11 @@
  (fn [{:keys [db]} [_ channel-id response]]
    (let [body      (:body response)
          items     (if (map? body) (:items body) body)
-         ;; Resolve names for the content items referenced by this playout so
-         ;; the guide can show titles and link to each media item.
+         ;; Resolve names for every item referenced by this playout — not just
+         ;; "content" kind events. Filler/bumper slots (e.g. Grout-sourced pre/
+         ;; mid/post/pad/tail/fallback/bumper roles) reference real media items
+         ;; too and need their titles resolved just like ordinary content.
          media-ids (->> items
-                        (filter #(#{nil "content"} (:kind %)))
                         (keep :media-item-id)
                         distinct)]
      {:db         (-> db
