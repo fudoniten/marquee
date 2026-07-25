@@ -72,8 +72,17 @@
               :end-ms   end-ms
               :title    (event-title ev media-items))))))
 
-(defn- content-event? [{:keys [kind]}]
-  (#{nil "content"} kind))
+(defn- content-event?
+  "Whether a PlayoutEvent represents an actual playing slot worth showing in
+  the guide/grid, as opposed to a true gap (e.g. \"offline\" dead air with
+  nothing scheduled). Historically this only matched :kind nil/\"content\", but
+  Grout-sourced filler/bumper slots come through with roles like \"pre\",
+  \"mid\", \"post\", \"pad\", \"tail\", \"fallback\", or \"bumper\" — those
+  reference real media items too and were being dropped from the grid
+  entirely. Any event backed by a media-item-id is real, playable content
+  regardless of its role."
+  [{:keys [kind media-item-id]}]
+  (boolean (or media-item-id (#{nil "content"} kind))))
 
 ;; ---------------------------------------------------------------------------
 ;; Grid page  (multi-channel guide)
