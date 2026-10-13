@@ -174,7 +174,7 @@
 
             # Start BFF server in background
             echo "Starting BFF server on port $BFF_PORT..."
-            clojure -M:server &
+            PORT="$BFF_PORT" clojure -M:server &
 
             # Wait a moment for BFF to start
             sleep 2

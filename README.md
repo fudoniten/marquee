@@ -1,143 +1,120 @@
 # Marquee
 
-A ClojureScript UI service built with **re-frame + Tailwind + shadcn/ui**,
-compiled by **shadow-cljs**, and packaged with **Nix** as a flake.
+Marquee is the web UI for the Pseudovision ecosystem. It's a ClojureScript
+single-page app (re-frame, Tailwind, shadcn/ui-style components, built with
+shadow-cljs) plus a small Clojure **BFF** (backend-for-frontend) that proxies
+the SPA's requests to **Pseudovision**, **Tunarr Scheduler**, **Grout**, and
+**Tunabrain**, and holds their credentials server-side.
 
-This service provides a web interface for managing media from **Pseudovision**,
-**Tunarr Scheduler**, and **Grout**, with future support for **Tunabrain**.
+Deployed at `https://marquee.kube.sea.fudo.link`.
 
-Dependencies come from two sources, each with its own lockfile for
-reproducible, offline Nix builds:
+Ongoing work lives in [PLAN.md](PLAN.md). Conventions and pitfalls for
+contributors are in [AGENTS.md](AGENTS.md).
 
-- `deps.edn` → `deps-lock.json` — Maven deps (shadow-cljs, reagent, re-frame),
-  locked by [clj-nix](https://github.com/jlesquembre/clj-nix).
-- `package.json` → `package-lock.json` — npm deps (react, Tailwind, and the
-  shadcn helpers `class-variance-authority`, `clsx`, `tailwind-merge`).
+## Pages
 
-## Usage
+| Page | What it shows |
+|---|---|
+| Home | Now Playing, active jobs, quick links |
+| Media / Media detail | PV libraries and items; per-item metadata from PV and TS |
+| Browse | Faceted browsing of the TS catalog |
+| Collections | Your own lists of media items, kept in the browser's localStorage |
+| Grout / Grout item | Grout filler and bumper clips, directory profiles |
+| Guide / Schedule | Channel guide grid and per-channel playout schedule |
+| Jobs | Async jobs from PV and TS |
+| API Docs | Browsable OpenAPI docs for every configured service |
 
-First-time setup — generate both lockfiles (required before `nix build`):
+## Running locally
+
+Everything runs from the Nix dev shell:
 
 ```sh
-nix run .#update
+nix develop                      # clojure, jdk, node, deps-lock
+source setup-env.sh              # or: cp .envrc.example .envrc && direnv allow
+nix run .#dev-server             # shadow-cljs watch + Tailwind watch + BFF
 ```
 
-Re-run it whenever you change `deps.edn` or `package.json`. Commit both
-lockfiles.
+The SPA is at `http://localhost:8080` (hot reload) and the BFF at
+`http://localhost:3000`. shadow-cljs proxies `/api/*` and SPA routes to the BFF.
 
-Build the static site (shadow-cljs release + Tailwind):
-
-```sh
-nix build      # output in ./result
-```
-
-Serve the built site:
+To run the pieces by hand instead (three terminals):
 
 ```sh
-nix run        # http://localhost:8080  (override with PORT=3000 nix run)
-```
-
-### Local development (hot reload)
-
-```sh
-nix develop                       # shell with clojure, jdk, node, deps-lock
-npm install                       # populate node_modules
-npx shadow-cljs watch app         # cljs hot reload + dev server on :8080
-# in another terminal, rebuild CSS on change:
+npx shadow-cljs watch app
 npx tailwindcss -c tailwind.config.js -i src/css/main.css -o public/css/main.css --watch
-# in a third terminal, run the backend BFF server:
-clojure -M:server                 # backend proxy on :3000
+PORT=3000 clojure -M:server      # the BFF defaults to :8080, which shadow-cljs uses
 ```
 
-### Environment Configuration
+### Configuration
 
-The backend proxy (BFF) requires environment variables to connect to the services:
+The BFF reads these environment variables. A service with no URL is simply
+disabled; Marquee still starts.
+
+| Variable | Purpose |
+|---|---|
+| `PSEUDOVISION_URL`, `PSEUDOVISION_TOKEN` | Pseudovision |
+| `TUNARR_SCHEDULER_URL`, `TUNARR_SCHEDULER_TOKEN` | Tunarr Scheduler |
+| `GROUT_URL`, `GROUT_TOKEN` | Grout |
+| `TUNABRAIN_URL`, `TUNABRAIN_TOKEN` | Tunabrain (API Docs page only; the UI reaches Tunabrain through TS) |
+| `JELLYFIN_URL`, `JELLYFIN_TOKEN` | Optional; thumbnails and direct links |
+| `ENABLE_UI_DEBUG_TRACES` | Include stack traces in BFF 500 responses (default `true`) |
+| `PORT` | BFF listen port (default `8080`; use `3000` in dev, where shadow-cljs has `8080`) |
+
+Tokens are optional; no downstream service checks them yet.
+
+## Building and deploying
 
 ```sh
-# Pseudovision
-export PSEUDOVISION_URL=https://pseudovision.kube.sea.fudo.link
-export PSEUDOVISION_TOKEN=your-token-here  # optional
-
-# Tunarr Scheduler
-export TUNARR_SCHEDULER_URL=https://tunarr-scheduler.kube.sea.fudo.link
-export TUNARR_SCHEDULER_TOKEN=your-token-here  # optional
-
-# Tunabrain (future)
-export TUNABRAIN_URL=https://tunabrain.kube.sea.fudo.link
-export TUNABRAIN_TOKEN=your-token-here  # optional
-
-# Grout (filler + long-form non-IMDB media store)
-export GROUT_URL=https://grout.kube.sea.fudo.link
-export GROUT_TOKEN=your-token-here  # optional
-
-# Include stack traces in unhandled-exception 500 responses (default: true).
-# Set to false to return only the error message.
-export ENABLE_UI_DEBUG_TRACES=true
+nix run .#update                 # regenerate deps-lock.json + package-lock.json
+nix build                        # static site only → ./result
+nix build .#bff                  # BFF uberjar with the SPA embedded
+nix run .#deployContainer        # build + push the image to registry.kube.sea.fudo.link
 ```
 
-You can also create a `.envrc` file (for use with [direnv](https://direnv.net/))
-or a shell script to set these variables.
+Run `nix run .#update` whenever `deps.edn` or `package.json` changes, and
+commit both lockfiles: the Nix build is offline and fails on a stale lock.
 
-## Layout
+## Testing
 
-### Frontend (ClojureScript)
-- `shadow-cljs.edn` — build config (`:browser` target, reads `deps.edn`).
-- `src/marquee/core.cljs` — entry point; boots re-frame and mounts the app.
-- `src/marquee/{events,subs,views}.cljs` — re-frame state + tiny page router.
-- `src/marquee/api.cljs` — martian-re-frame service bootstrap for OpenAPI integration.
-- `src/marquee/pages/` — page components:
-  - `home.cljs` — landing page: Now Playing, active jobs, and quick links.
-  - `media.cljs` — displays media from Pseudovision libraries.
-  - `media_detail.cljs` — shows metadata from both Pseudovision and Tunarr Scheduler.
-  - `api_docs.cljs` — browsable OpenAPI documentation for every configured
-    service (Pseudovision, Tunarr Scheduler, Tunabrain). Fetches the specs the
-    BFF already serves at `/api/<service>/openapi.json` and renders a
-    filterable list of operations grouped by tag, plus component schemas.
-- `src/marquee/components/{button,card}.cljs` — shadcn/ui as Reagent components.
-- `src/marquee/lib/utils.cljs` — the shadcn `cn` helper.
-- `src/css/main.css` — Tailwind entry + shadcn design tokens.
-- `tailwind.config.js`, `postcss.config.js` — Tailwind setup.
+There is no automated test suite yet. Check changes by running the dev server
+against the deployed services and exercising the affected pages.
 
-### Backend (Clojure BFF)
-- `src/marquee/server/core.clj` — Backend-For-Frontend proxy server.
-- `src/marquee/server/config.clj` — Service configuration (URLs, tokens).
+## How it talks to the services
 
-### Build
-- `flake.nix` — `build` / `run` / `update` wiring.
-
-## Service Integration Architecture
-
-Marquee uses a **Backend-For-Frontend (BFF)** pattern to integrate with OpenAPI services:
-
-1. **Frontend** (ClojureScript) uses [martian-re-frame](https://github.com/oliyh/martian)
-   to auto-generate typed API clients from OpenAPI specs.
-2. **BFF** (Clojure) proxies all API requests, adding authentication tokens and
-   rewriting OpenAPI specs to route through itself.
-3. **Services** (Pseudovision, Tunarr Scheduler, Tunabrain) expose OpenAPI REST APIs.
-
-This architecture keeps credentials server-side and provides a clean, type-safe
-API layer in the frontend.
-
-### Making API Calls
-
-From the frontend, dispatch martian requests:
+The SPA never calls a service directly. On first use the BFF fetches each
+service's `/openapi.json`, rewrites its server URL to `/api/<service>`, and adds
+an `operationId` (`{method}-{path-with-dashes}`) to any operation missing one.
+The SPA loads those rewritten specs through
+[martian-re-frame](https://github.com/oliyh/martian) and dispatches requests by
+operation id:
 
 ```clojure
 (rf/dispatch [::martian/request
-              :get-api-media-libraries                  ;; operation ID from OpenAPI
-              {::martian/instance-id :pseudovision}     ;; service ID + path/query/body params
-              [::on-success]                            ;; success event
-              [::on-failure]])                          ;; failure event
+              :get-api-media-items-id                   ;; GET /api/media/items/{id}
+              {::martian/instance-id :pseudovision
+               :id 123}                                 ;; path/query/body params
+              [::on-success]
+              [::on-failure]])
 ```
 
-The operation IDs are derived from the OpenAPI spec and follow the pattern
-`verb-path-with-dashes` (e.g., `get-api-media-items-id` for `GET /api/media/items/{id}`).
+## Layout
 
-## shadcn/ui approach
+```
+src/marquee/
+├── core.cljs              entry point; boots re-frame and mounts the app
+├── events.cljs, subs.cljs re-frame events (all HTTP dispatch) and subscriptions
+├── views.cljs, routes.cljs page table, nav, and URL routing
+├── api.cljs               martian instances, one per service
+├── pages/                 one namespace per page
+├── components/            shadcn/ui-style Reagent components
+├── lib/utils.cljs         the shadcn `cn` helper
+└── server/
+    ├── core.clj           the BFF (proxy, spec rewriting, Jellyfin proxy)
+    ├── config.clj         env-var configuration
+    └── dev.clj            shadow-cljs dev proxy predicate (not in the uberjar)
+src/css/main.css           Tailwind entry and shadcn design tokens
+```
 
-shadcn ships its components as React/TSX you copy into your project. Since
-shadow-cljs compiles ClojureScript (not TSX), the components here are
-reimplemented as small Reagent components that use shadcn's exact Tailwind
-classes, design tokens, and the same npm helpers (`cva` for variants,
-`clsx` + `tailwind-merge` for class merging). The result looks and behaves
-like shadcn/ui while keeping the build pure-cljs.
+shadcn ships React/TSX components, so the ones here are small Reagent
+reimplementations that use shadcn's Tailwind classes, design tokens, and npm
+helpers (`cva`, `clsx`, `tailwind-merge`).
