@@ -255,8 +255,8 @@
                           " " (:uri req)))
             (println trace))
           {:status 500
-           :body   {:error (.getMessage t)
-                    :trace trace}})))))
+           :body   (cond-> {:error (.getMessage t)}
+                     config/enable-ui-debug-traces? (assoc :trace trace))})))))
 
 (def app (-> handler
              ;; Serve compiled SPA assets (CSS, JS, images) from the embedded

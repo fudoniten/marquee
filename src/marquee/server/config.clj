@@ -33,6 +33,13 @@
            :token     (env "GROUT_TOKEN")
            :spec-path (env "GROUT_SPEC_PATH" "/openapi.json")}})
 
+;; Whether unhandled-exception 500s carry the stack trace to the browser.
+;; On by default while the ecosystem is in active development; set
+;; ENABLE_UI_DEBUG_TRACES=false to return only the error message.
+(def enable-ui-debug-traces?
+  (not (contains? #{"false" "0" "no" "off"}
+                  (some-> (env "ENABLE_UI_DEBUG_TRACES") clojure.string/trim clojure.string/lower-case))))
+
 ;; Jellyfin is optional and not an OpenAPI-managed service.
 (def jellyfin
   {:url   (url-env "JELLYFIN_URL")

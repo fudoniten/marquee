@@ -69,6 +69,10 @@ export TUNABRAIN_TOKEN=your-token-here  # optional
 # Grout (filler + long-form non-IMDB media store)
 export GROUT_URL=https://grout.kube.sea.fudo.link
 export GROUT_TOKEN=your-token-here  # optional
+
+# Include stack traces in unhandled-exception 500 responses (default: true).
+# Set to false to return only the error message.
+export ENABLE_UI_DEBUG_TRACES=true
 ```
 
 You can also create a `.envrc` file (for use with [direnv](https://direnv.net/))
