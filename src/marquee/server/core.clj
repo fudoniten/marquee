@@ -161,7 +161,9 @@
         path     (subs (:uri req) (count "/api/jellyfin"))
         target   (proxy-target url path (:query-string req))
         headers  (cond-> (dissoc (:headers req) "host" "content-length")
-                   token (assoc "x-emby-token" token))
+                   ;; Jellyfin 12 rejects the legacy X-Emby-Token header
+                   ;; with 401; the Authorization form is the supported one.
+                   token (assoc "authorization" (str "MediaBrowser Token=\"" token "\"")))
         response (client/request {:method          (:request-method req)
                                   :url             target
                                   :headers         headers
