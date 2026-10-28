@@ -235,6 +235,9 @@
         in helpers.deployContainers {
           name = "marquee";
           repo = "registry.kube.sea.fudo.link";
+          # The registry is LAN-only and unauthenticated; without this the helper
+          # refuses to push unless skopeo has a stored login for it.
+          requireAuth = false;
           tags = [ "latest" version.versionTag ];
           env = {
             GIT_COMMIT = version.gitCommit;
