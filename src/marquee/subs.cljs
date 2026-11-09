@@ -324,6 +324,10 @@
  (fn [db _] (:channel-events db {})))
 
 (rf/reg-sub
+ ::channel-events-loading-set
+ (fn [db _] (:channel-events-loading db #{})))
+
+(rf/reg-sub
  ::channel-events-loading?
  (fn [db _] (boolean (seq (:channel-events-loading db)))))
 

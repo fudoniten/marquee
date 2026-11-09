@@ -6,7 +6,8 @@
             [marquee.subs :as subs]
             [marquee.components.button :refer [button]]
             [marquee.components.card :refer [card card-header card-title
-                                             card-description card-content]]))
+                                             card-description card-content]]
+            [marquee.lib.utils :as utils]))
 
 ;;; ── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -44,10 +45,12 @@
                   (assoc ev :start-ms s :end-ms e)))))
           events)))
 
-(defn- event-title [{:keys [custom-title media-item-id]} media-items]
+(defn- event-title [{:keys [custom-title media-item-id] :as ev} media-items]
   (let [item (get media-items media-item-id)]
     (or (not-empty custom-title)
+        (utils/event-guide-title ev)
         (when (map? item) (or (not-empty (:title item)) (not-empty (:name item))))
+        (not-empty (:title ev))
         (when media-item-id (str "Item #" media-item-id))
         "Untitled")))
 

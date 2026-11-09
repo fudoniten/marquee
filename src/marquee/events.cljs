@@ -1348,8 +1348,9 @@
      {:db         (-> db
                       (assoc :channels channels)
                       (assoc :channels-loading? false))
-      ;; Kick off event loading for each channel so the guide has data.
-      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
+      ;; Kick off event loading for each channel so the guide has data; each
+      ;; row fills in as its own response arrives.
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch) :window]) channels)})))
 
 (rf/reg-event-db
  ::load-channels-failure
@@ -1357,30 +1358,48 @@
    (log-request-failure "Failed to load channels:" response)
    (-> db (assoc :channels []) (assoc :channels-loading? false))))
 
-;; Load playout events for a single channel (for guide grid or channel page).
-;; cursor is an optional ISO-8601 string; omitting it returns events from now.
+;; Load playout events for a single channel.
+;;
+;; `mode` :window (the guide grid and the home page's now-playing) asks PV for
+;; exactly the events overlapping the guide window, [schedule-window-start,
+;; + grid-window-ms), via ?from=&until=. Without it (the channel page) it asks
+;; for the next 50 upcoming events. A PV that predates the window params
+;; doesn't declare them in its spec, so martian drops them and the request
+;; degrades to "upcoming events", as before.
+;;
+;; PV's events carry guide display fields (:item-kind, :library-id/-name,
+;; :parent-title, :grandparent-title), so the guide no longer fetches every
+;; media item and its ancestors — that fan-out (hundreds of requests for a
+;; channel full of short Grout filler) was most of the guide's load time.
+;; Items are only fetched for events from an older PV without those fields.
+(def ^:private window-event-limit 1000)
+
 (rf/reg-event-fx
  ::load-channel-events
- (fn [{:keys [db]} [_ channel-id]]
-   {:db       (update db :channel-events-loading (fnil conj #{}) channel-id)
-    :dispatch [::martian/request
-               :get-api-channels-channel-id-playout-events
-               {::martian/instance-id :pseudovision
-                :channel-id           channel-id
-                :limit                50}
-               [::load-channel-events-success channel-id]
-               [::load-channel-events-failure channel-id]]}))
+ (fn [{:keys [db]} [_ channel-id mode]]
+   (let [window? (= mode :window)
+         start   (:schedule-window-start db (.getTime (js/Date.)))
+         params  (cond-> {::martian/instance-id :pseudovision
+                          :channel-id           channel-id
+                          :limit                (if window? window-event-limit 50)}
+                   window? (assoc :from  (.toISOString (js/Date. start))
+                                  :until (.toISOString (js/Date. (+ start grid-window-ms)))))]
+     {:db       (update db :channel-events-loading (fnil conj #{}) channel-id)
+      :dispatch [::martian/request
+                 :get-api-channels-channel-id-playout-events
+                 params
+                 [::load-channel-events-success channel-id]
+                 [::load-channel-events-failure channel-id]]})))
 
 (rf/reg-event-fx
  ::load-channel-events-success
  (fn [{:keys [db]} [_ channel-id response]]
    (let [body      (:body response)
          items     (if (map? body) (:items body) body)
-         ;; Resolve names for every item referenced by this playout — not just
-         ;; "content" kind events. Filler/bumper slots (e.g. Grout-sourced pre/
-         ;; mid/post/pad/tail/fallback/bumper roles) reference real media items
-         ;; too and need their titles resolved just like ordinary content.
+         ;; Only events without PV's guide fields need their item (and its
+         ;; ancestors) fetched to be named and coloured.
          media-ids (->> items
+                        (remove #(contains? % :item-kind))
                         (keep :media-item-id)
                         distinct)]
      {:db         (-> db
@@ -1402,21 +1421,21 @@
    (let [channels (or (:channels db) [])]
      {:db         (update db :schedule-window-start + grid-window-ms)
       ;; Reload events so we have data for the new window.
-      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch) :window]) channels)})))
 
 (rf/reg-event-fx
  ::schedule-window-back
  (fn [{:keys [db]} _]
    (let [channels (or (:channels db) [])]
      {:db         (update db :schedule-window-start - grid-window-ms)
-      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch) :window]) channels)})))
 
 (rf/reg-event-fx
  ::schedule-window-reset
  (fn [{:keys [db]} _]
    (let [channels (or (:channels db) [])]
      {:db         (assoc db :schedule-window-start (.getTime (js/Date.)))
-      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch)]) channels)})))
+      :dispatch-n (mapv (fn [ch] [::load-channel-events (:id ch) :window]) channels)})))
 
 (rf/reg-event-fx
  ::navigate-to-channel

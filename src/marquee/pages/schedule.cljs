@@ -52,11 +52,13 @@
   "Best available label for a playout event: an explicit custom title, else the
   referenced media item's ancestor-qualified name (e.g. \"Episode 13 - Season 2
   - The Show\", resolved from the cache), else a bare id."
-  [{:keys [custom-title media-item-id]} media-items]
+  [{:keys [custom-title media-item-id] :as ev} media-items]
   (let [item (get media-items media-item-id)]
     (or (not-empty custom-title)
+        (utils/event-guide-title ev)
         (when (map? item) (or (not-empty (utils/media-display-name item media-items))
                               (not-empty (:title item))))
+        (not-empty (:title ev))
         (when media-item-id (str "Item #" media-item-id))
         "Untitled")))
 
@@ -161,18 +163,34 @@
         (format-time (+ window-start (* t tick-ms)))])
      [now-line window-start window-end]]))
 
+(def ^:private short-pct
+  "Slots narrower than this share of the window (4% of 3h ≈ 7 min) are too
+  small to label: runs of them are drawn as one \"short items\" block instead
+  of a row of overlapping slivers."
+  4)
+
+(defn- span-pct [start-ms end-ms window-start window-end]
+  (let [span (- window-end window-start)
+        cs   (max start-ms window-start)
+        ce   (min end-ms window-end)]
+    (* 100 (/ (max 0 (- ce cs)) span))))
+
+(defn- slot-geometry [start-ms end-ms window-start window-end]
+  (let [span (- window-end window-start)
+        cs   (max start-ms window-start)]
+    {:left  (* 100 (/ (- cs window-start) span))
+     :width (span-pct start-ms end-ms window-start window-end)}))
+
 (defn- grid-slot [{:keys [title start-ms end-ms]} hue window-start window-end on-click]
   (let [now   (now-ms)
-        span  (- window-end window-start)
-        cs    (max start-ms window-start)
-        ce    (min end-ms   window-end)
-        left  (* 100 (/ (- cs window-start) span))
-        width (* 100 (/ (- ce cs) span))
+        {:keys [left width]} (slot-geometry start-ms end-ms window-start window-end)
         live? (and (<= start-ms now) (> end-ms now))
-        past? (< end-ms now)]
-    [:div {:class    (str "absolute top-1 bottom-1 rounded-sm px-1.5 overflow-hidden cursor-pointer "
+        past? (< end-ms now)
+        label? (>= width short-pct)]
+    [:div {:class    (str "absolute top-1 bottom-1 rounded-sm overflow-hidden cursor-pointer "
                           "border flex flex-col justify-center leading-tight select-none "
                           "transition-[filter] hover:brightness-125 "
+                          (if label? "px-1.5 " "px-0 ")
                           (cond
                             live? "ring-1 ring-primary font-semibold "
                             past? "opacity-60 "
@@ -183,40 +201,107 @@
                               live? "bg-primary/20 border-primary"
                               past? "bg-muted/40 border-muted text-muted-foreground"
                               :else "bg-card border-border")))
-          :style    (merge {:left (pct left) :width (pct (max width 0)) :min-width "18px"}
+          :style    (merge {:left (pct left) :width (pct width) :min-width "2px"}
                            (when hue (library-color-style hue past?)))
           :title    (str title "\n" (format-time start-ms) " – " (format-time end-ms))
           :on-click #(when on-click (on-click))}
-     (when live?
-       [:span {:class "text-[9px] font-bold uppercase tracking-wide text-primary"} "Live"])
-     [:span {:class "truncate text-xs"} title]]))
+     (when label?
+       (list
+        (when live?
+          ^{:key "live"} [:span {:class "text-[9px] font-bold uppercase tracking-wide text-primary"} "Live"])
+        ^{:key "title"} [:span {:class "truncate text-xs"} title]))]))
 
-(defn- channel-row [channel window-start window-end events media-items libraries-by-id on-click-channel]
+(defn- cluster-slot
+  "One block standing in for a run of adjacent short slots (filler, bumpers,
+  promos). The tooltip lists what's in it; clicking opens the channel page."
+  [{:keys [start-ms end-ms events]} window-start window-end on-click]
+  (let [now   (now-ms)
+        {:keys [left width]} (slot-geometry start-ms end-ms window-start window-end)
+        live? (and (<= start-ms now) (> end-ms now))
+        past? (< end-ms now)
+        n     (count events)
+        shown 12]
+    [:div {:class    (str "absolute top-1 bottom-1 rounded-sm overflow-hidden cursor-pointer border "
+                          "border-dashed border-border bg-muted/50 text-muted-foreground "
+                          "flex items-center justify-center select-none hover:brightness-110 "
+                          (cond live? "ring-1 ring-primary " past? "opacity-60 " :else ""))
+          :style    {:left (pct left) :width (pct width) :min-width "2px"
+                     :background-image "repeating-linear-gradient(135deg, transparent 0 4px, hsl(var(--border) / 0.5) 4px 5px)"}
+          :title    (str n " short items, " (format-time start-ms) " – " (format-time end-ms) "\n"
+                         (str/join "\n" (map (fn [{:keys [title start-ms]}]
+                                               (str (format-time start-ms) "  " title))
+                                             (take shown events)))
+                         (when (> n shown) (str "\n… and " (- n shown) " more")))
+          :on-click #(when on-click (on-click))}
+     (when (>= width short-pct)
+       [:span {:class "truncate text-[11px] px-1"} (str n " short items")])]))
+
+(defn- layout-row
+  "Groups a row's visible events into render segments: a long event stays a
+  {:event ev}; a run of adjacent short ones (each < `short-pct` of the window,
+  separated by under a minute) becomes {:cluster {...}} when there are two or
+  more, else stays a single unlabeled sliver."
+  [events window-start window-end]
+  (let [short? #(< (span-pct (:start-ms %) (:end-ms %) window-start window-end) short-pct)
+        flush  (fn [segs run]
+                 (cond
+                   (empty? run)      segs
+                   (= 1 (count run)) (conj segs {:event (first run)})
+                   :else             (conj segs {:cluster {:start-ms (:start-ms (first run))
+                                                           :end-ms   (:end-ms (peek run))
+                                                           :events   run}})))]
+    (loop [[ev & more] events, run [], segs []]
+      (cond
+        (nil? ev)
+        (flush segs run)
+
+        (short? ev)
+        (if (and (seq run) (> (- (:start-ms ev) (:end-ms (peek run))) 60000))
+          (recur more [ev] (flush segs run))
+          (recur more (conj run ev) segs))
+
+        :else
+        (recur more [] (conj (flush segs run) {:event ev}))))))
+
+(defn- row-spinner []
+  [:span {:class "inline-block h-3 w-3 shrink-0 rounded-full border-2 border-muted-foreground/40 border-t-transparent animate-spin"
+          :aria-label "Loading"}])
+
+(defn- channel-row [channel window-start window-end events loading? media-items libraries-by-id on-click-channel]
   (let [visible (->> events
                      (filter content-event?)
                      (keep #(event->display % media-items))
                      (filter #(and (< (:start-ms %) window-end)
-                                   (> (:end-ms %)  window-start))))]
+                                   (> (:end-ms %)  window-start)))
+                     (sort-by :start-ms))
+        to-channel #(rf/dispatch [::events/navigate-to-channel (:id channel)])]
     [:div {:class "flex border-b border-border last:border-0"}
-     [:div {:class    (str label-col " flex-shrink-0 flex items-center px-3 py-2 bg-muted/30 "
-                           "border-r border-border text-sm font-medium truncate cursor-pointer "
+     [:div {:class    (str label-col " flex-shrink-0 flex items-center gap-2 px-3 py-2 bg-muted/30 "
+                           "border-r border-border text-sm font-medium cursor-pointer "
                            "hover:bg-accent hover:text-accent-foreground")
             :title    (:name channel)
             :on-click on-click-channel}
-      (:name channel)]
+      [:span {:class "truncate"} (:name channel)]
+      (when loading? [row-spinner])]
      [:div {:class "relative flex-1" :style (merge {:height "56px"} gridline-style)}
       [now-line window-start window-end]
-      (for [ev visible
-            :let [item (get media-items (:media-item-id ev))
-                  lib  (item->library item libraries-by-id)
-                  hue  (when lib (hue-for (:key lib)))]]
-        ^{:key (str (:start-ms ev) "-" (:title ev))}
-        ;; Clicking a slot opens the media item it plays; fall back to the
-        ;; channel page when there's no item to link to (e.g. filler/offline).
-        [grid-slot ev hue window-start window-end
-         (if-let [mid (:media-item-id ev)]
-           #(rf/dispatch [::events/navigate-to-media-detail mid])
-           #(rf/dispatch [::events/navigate-to-channel (:id channel)]))])]]))
+      (when (and loading? (empty? visible))
+        [:div {:class "absolute inset-1 rounded-sm bg-muted/60 animate-pulse"}])
+      (for [{:keys [event cluster]} (layout-row visible window-start window-end)]
+        (if cluster
+          ^{:key (str "c-" (:start-ms cluster))}
+          [cluster-slot cluster window-start window-end to-channel]
+          (let [ev   event
+                item (get media-items (:media-item-id ev))
+                lib  (or (utils/event-library ev) (item->library item libraries-by-id))
+                hue  (when lib (hue-for (:key lib)))]
+            ^{:key (str (:start-ms ev) "-" (:title ev))}
+            ;; Clicking a slot opens the media item it plays; fall back to the
+            ;; channel page when there's no item to link to (e.g. offline).
+            [grid-slot ev hue window-start window-end
+             (if-let [mid (:media-item-id ev)]
+               #(rf/dispatch [::events/navigate-to-media-detail mid])
+               to-channel)])))]]))
 
 (defn- used-libraries
   "Distinct {:key :label} libraries appearing among the guide's content events,
@@ -224,9 +309,9 @@
   [channel-evs media-items libraries-by-id]
   (->> (mapcat val channel-evs)
        (filter content-event?)
-       (keep :media-item-id)
-       (map #(get media-items %))
-       (keep #(item->library % libraries-by-id))
+       (keep #(or (utils/event-library %)
+                  (some-> (:media-item-id %) (->> (get media-items))
+                          (item->library libraries-by-id))))
        (distinct)
        (sort-by :label)))
 
@@ -246,6 +331,7 @@
         media-items     @(rf/subscribe [::subs/media-items-map])
         libraries       @(rf/subscribe [::subs/media-libraries])
         loading?        @(rf/subscribe [::subs/channels-loading?])
+        evs-loading     @(rf/subscribe [::subs/channel-events-loading-set])
         window-start    @(rf/subscribe [::subs/schedule-window-start])
         window-end      (+ window-start grid-window-ms)
         libraries-by-id (into {} (map (juxt :id :name) (or libraries [])))
@@ -291,7 +377,8 @@
          (for [ch channels
                :let [evs (get channel-evs (:id ch) [])]]
            ^{:key (:id ch)}
-           [channel-row ch window-start window-end evs media-items libraries-by-id
+           [channel-row ch window-start window-end evs (contains? evs-loading (:id ch))
+            media-items libraries-by-id
             #(rf/dispatch [::events/navigate-to-channel (:id ch)])])]])]))
 
 ;; ---------------------------------------------------------------------------
@@ -784,7 +871,7 @@
              [:span {:class "text-xs text-muted-foreground"}
               (str "v" (:version grid)
                    (when-let [c (:created-at grid)]
-                     (str " · frozen " (subs (str c) 0 (min 10 (count (str c))))))))])
+                     (str " · frozen " (subs (str c) 0 (min 10 (count (str c)))))))])
            (when-let [fs (and (map? grid) (get-in grid [:feasibility :overall_status]))]
              [feasibility-badge fs])
            (when slug
