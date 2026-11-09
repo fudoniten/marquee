@@ -1716,21 +1716,27 @@
    (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
-;; Channel scheduling regeneration (quarterly → monthly → weekly → playout)
+;; Channel scheduling regeneration (quarterly → monthly → daily → playout)
 ;;
 ;; Tunarr Scheduler's periodic tasks are normally triggered by k8s CronJobs
 ;; (see its deploy/k8s), but operators need to re-run any stage on demand —
 ;; e.g. after editing guidance, or to recover from a bad LLM proposal. All
-;; three POST endpoints accept an optional repeatable ?channel=<config-key>
-;; selector to scope the run to one channel (omitting it runs every
-;; configured channel); we always pass the current channel's slug, the same
-;; lower-cased-name identifier already used for strategic guidance.
+;; three POST endpoints accept an optional repeatable ?channel=<selector> to
+;; scope the run to one channel (omitting it runs every configured channel);
+;; we always pass the current channel's slug, the same lower-cased-name
+;; identifier already used for strategic guidance (TS matches it against the
+;; channel's display name case-insensitively).
 ;;
 ;; Quarterly and monthly are heavy LLM-backed jobs and return 202 + a job id,
 ;; tracked like any other job on the Jobs page (source :tunarr-scheduler,
-;; type :media/scheduling-quarterly / :media/scheduling-monthly). Weekly is a
-;; fast, synchronous grid-expansion step (no LLM call) and returns 200 once
-;; done. As with guidance, these go straight to the BFF rather than through
+;; type :media/scheduling-quarterly / :media/scheduling-monthly). Daily
+;; extends the channel's PV timeline to the 14-day horizon without resetting
+;; it (PV rebuild from=horizon, so rotation and near-term events are kept).
+;; It has no LLM call; it may answer 200 with per-channel results or 202 with
+;; a :media/scheduling-daily job, and either way the PV rebuild it starts
+;; shows up as the channel's playout job. (The old weekly DailySlots push and
+;; its /api/scheduling/weekly endpoint were removed in tunarr-scheduler#130.)
+;; As with guidance, these go straight to the BFF rather than through
 ;; martian: the endpoints take no body, so there's nothing for martian's
 ;; query-schema coercion to drop, but a plain fetch keeps this consistent
 ;; with the rest of the scheduling API.
@@ -1761,14 +1767,22 @@
                      :on-failure [::regenerate-scheduling-failure k]}})))
 
 (rf/reg-event-fx
- ::trigger-regenerate-weekly
- (fn [{:keys [db]} [_ channel-slug]]
-   (let [k [:regenerate-weekly channel-slug]]
+ ::trigger-extend-schedule
+ (fn [{:keys [db]} [_ channel-slug channel-id]]
+   (let [k [:extend-schedule channel-slug]]
      {:db           (assoc-in db [:action-states k] {:status :loading})
-      ::http-mutate {:url        (scheduling-task-url :weekly channel-slug)
+      ::http-mutate {:url        (scheduling-task-url :daily channel-slug)
                      :method     "POST"
-                     :on-success [::regenerate-scheduling-success k "Weekly schedule regenerated"]
+                     :on-success [::extend-schedule-success k channel-id]
                      :on-failure [::regenerate-scheduling-failure k]}})))
+
+(rf/reg-event-fx
+ ::extend-schedule-success
+ (fn [_ [_ action-key channel-id _response]]
+   ;; Daily kicks off a PV rebuild job for the channel; poll it so the
+   ;; "Generating…" banner and the event list pick up the new events.
+   (cond-> (action-success-fx action-key "Schedule extension started")
+     channel-id (update :dispatch-n (fnil conj []) [::poll-channel-playout-job channel-id]))))
 
 (rf/reg-event-fx
  ::regenerate-scheduling-success

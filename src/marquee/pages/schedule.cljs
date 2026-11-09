@@ -411,7 +411,7 @@
 (defn- channel-guidance-slug
   "Identifier Tunarr Scheduler keys a channel under: the channel's name in the
    lower-cased slug form its scheduling endpoints use (e.g. \"Spectrum\" →
-   \"spectrum\"). Shared by guidance, the quarterly/monthly/weekly regeneration
+   \"spectrum\"). Shared by guidance, the quarterly/monthly/daily scheduling
    triggers, and the quarterly outline — all keyed by the same config-key
    identifier. Adjust here if the scheduler ever keys any of these by a
    different field."
@@ -692,7 +692,7 @@
          [:p {:class "text-muted-foreground"} (:description channel)])]
       [:div {:class "flex items-center gap-2 flex-wrap"}
        [ffmpeg-profile-selector channel]
-       ;; The generation pipeline, in order: quarterly → monthly → weekly →
+       ;; The generation pipeline, in order: quarterly → monthly → daily →
        ;; playout. Each stage can be re-run independently on demand.
        (when slug
          [action-btn {:action-key [:regenerate-quarterly slug]
@@ -703,9 +703,9 @@
                       :label      "Regenerate Monthly"
                       :on-click   #(rf/dispatch [::events/trigger-regenerate-monthly slug])}])
        (when slug
-         [action-btn {:action-key [:regenerate-weekly slug]
-                      :label      "Regenerate Weekly"
-                      :on-click   #(rf/dispatch [::events/trigger-regenerate-weekly slug])}])
+         [action-btn {:action-key [:extend-schedule slug]
+                      :label      "Extend Schedule"
+                      :on-click   #(rf/dispatch [::events/trigger-extend-schedule slug (:id channel)])}])
        (when (:id channel)
          [action-btn {:action-key [:rebuild-playout (:id channel)]
                       :label      (if playout-job "Generating…" "Rebuild Playout")
