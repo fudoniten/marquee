@@ -324,6 +324,10 @@
  (fn [db _] (:channel-events db {})))
 
 (rf/reg-sub
+ ::channel-events-loading-set
+ (fn [db _] (:channel-events-loading db #{})))
+
+(rf/reg-sub
  ::channel-events-loading?
  (fn [db _] (boolean (seq (:channel-events-loading db)))))
 
@@ -352,23 +356,31 @@
    (let [id (:current-channel-id db)]
      (get-in db [:channel-events id]))))
 
-;; A channel's strategic scheduling guidance, keyed by channel slug. nil while
-;; unrequested, :loading in flight, false on load failure, or {:guidance
-;; <str|nil>} once loaded (:guidance nil when none is set). See the
-;; ::load-channel-guidance / ::set-channel-guidance events.
+;; A channel's scheduling guidance, keyed by channel slug. nil while
+;; unrequested, :loading in flight, false on load failure, or the normalised
+;; guidance map once loaded ({:strategic_guidance :quarterly_theme
+;; :monthly_theme :planned_events}). See the ::load-channel-guidance /
+;; ::set-channel-guidance events.
 (rf/reg-sub
  ::channel-guidance
  (fn [db [_ channel-slug]]
    (get-in db [:channel-guidance channel-slug])))
 
-;; A channel's frozen quarterly grid ("outline"), keyed by channel slug. nil
-;; while unrequested, :loading in flight, false when there's no frozen grid
-;; yet (or the load failed), or the GridRecord body once loaded. See the
-;; ::load-channel-grid / ::reload-channel-grid events.
+;; A channel's frozen grid ("outline") for one quarter, keyed by channel slug
+;; and periods/quarter-key ("Q1-2027"). nil while unrequested, :loading in
+;; flight, false when there's no frozen grid for that quarter (or the load
+;; failed), or the GridRecord body once loaded. See ::load-channel-grid.
 (rf/reg-sub
  ::channel-grid
- (fn [db [_ channel-slug]]
-   (get-in db [:channel-grid channel-slug])))
+ (fn [db [_ channel-slug quarter-key]]
+   (get-in db [:channel-grid channel-slug quarter-key])))
+
+;; A channel's monthly overrides for one month ("YYYY-MM"), same states as
+;; ::channel-grid. See ::load-channel-overrides.
+(rf/reg-sub
+ ::channel-overrides
+ (fn [db [_ channel-slug month]]
+   (get-in db [:channel-overrides channel-slug month])))
 
 (rf/reg-sub
  ::channel-events-loading-for?

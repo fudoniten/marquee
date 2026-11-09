@@ -114,8 +114,29 @@
      [:span {:class "mr-4"}
       (str (name k) ": " (if (coll? v) (str (count v) " items") v))])])
 
+(defn- daily-schedule-result
+  "Per-channel outcome of a :media/scheduling-daily job (TS returns
+   {:task \"daily\" :horizon N :results {channel {:status .. :events-generated ..
+   :warning .. :error ..}}}; a channel PV doesn't know is a bare keyword)."
+  [{:keys [horizon results]}]
+  [:div {:class "mt-2 space-y-1 text-xs"}
+   (when horizon
+     [:div {:class "text-muted-foreground"} (str "Horizon: " horizon " days")])
+   (for [[channel r] (sort-by (comp str key) results)]
+     (let [{:keys [status events-generated warning error]} (if (map? r) r {:status r})
+           status (some-> status name)]
+       ^{:key (str channel)}
+       [:div {:class "flex flex-wrap items-baseline gap-2"}
+        [:span {:class "font-medium"} (name channel)]
+        [:span {:class (if (= "ok" status) "text-primary" "text-destructive")} status]
+        (when events-generated
+          [:span {:class "text-muted-foreground"} (str events-generated " events")])
+        (when (or warning error)
+          [:span {:class "text-muted-foreground"} (or error warning)])]))])
+
 (defn- result-section [type result]
   (case (keyword type)
+    :media/scheduling-daily [daily-schedule-result result]
     :media/tag-audit  [tag-audit-result result]
     :media/tag-triage [tag-triage-result result]
     [generic-result result]))
