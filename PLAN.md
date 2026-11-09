@@ -1,6 +1,6 @@
 # Marquee plan
 
-Last reviewed: 2026-10-13
+Last reviewed: 2026-11-09
 
 This is the one place for ongoing work on Marquee: what's being worked on,
 what's next, known issues, and the decisions that still shape the code. Delete
@@ -14,10 +14,10 @@ in the [ecosystem plan](https://github.com/fudoniten/pseudovision/blob/master/PL
 
 ## Next
 
-- [ ] Show TS's plan read API on the schedule page: frozen grid, feasibility
-      report, and monthly overrides
-      (`/api/scheduling/channels/:ch/{grid,grids,overrides,preview,plan}`).
-      Today only pvcli reads it.
+- [ ] Finish TS's plan read API on the schedule page. Grid, feasibility and
+      monthly overrides are shown now; grid version history (`/grids`), the
+      overrides history and `/preview` are not.
+- [ ] Add a button for PV's `POST /api/sync/grout` (Grout long-form sync).
 - [ ] Stop falling back to TS's `/api/genres` (`::load-genres-as-dimensions`)
       so TS can delete it as part of its dimension cleanup; genres are the
       `genre` dimension now.

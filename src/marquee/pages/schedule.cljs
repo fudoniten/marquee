@@ -11,6 +11,7 @@
             [marquee.components.action-button :refer [action-btn]]
             [marquee.components.copy-button :refer [copy-button]]
             [marquee.components.card :refer [card card-content]]
+            [marquee.lib.periods :as periods]
             [marquee.lib.utils :as utils]))
 
 ;; ---------------------------------------------------------------------------
@@ -403,76 +404,124 @@
            :error   [:span {:class "text-xs text-destructive"} (or (:message state) "Error")]
            nil)]))))
 
-;; ── Strategic guidance ────────────────────────────────────────────────────────
+;; ── Scheduling guidance ───────────────────────────────────────────────────────
 
 (def ^:private guidance-textarea-class
   "flex w-full min-h-[5rem] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+(def ^:private text-input-class
+  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")
+
+(def ^:private select-class
+  "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm")
+
+(defn- section-label [text]
+  [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"} text])
 
 (defn- channel-guidance-slug
   "Identifier Tunarr Scheduler keys a channel under: the channel's name in the
    lower-cased slug form its scheduling endpoints use (e.g. \"Spectrum\" →
    \"spectrum\"). Shared by guidance, the quarterly/monthly/daily scheduling
-   triggers, and the quarterly outline — all keyed by the same config-key
-   identifier. Adjust here if the scheduler ever keys any of these by a
+   triggers, the quarterly outline and the monthly overrides — all keyed by the
+   same identifier. Adjust here if the scheduler ever keys any of these by a
    different field."
   [channel]
   (some-> (:name channel) str/trim str/lower-case not-empty))
 
+(def ^:private guidance-field-meta
+  ;; [key label hint multiline?]
+  [[:strategic_guidance "Strategic guidance"
+    "Standing rules for this channel, fed to every quarterly and monthly run. e.g. Air Seinfeld at least twice a week in primetime. Adult content after 22:00 only."
+    true]
+   [:quarterly_theme "Quarterly theme"
+    "Optional theme for the next quarterly grid, e.g. \"Autumn of mysteries\"."
+    false]
+   [:monthly_theme "Monthly theme"
+    "Optional theme for the next monthly overrides, e.g. \"Halloween horror\"."
+    false]
+   [:planned_events "Planned events"
+    "One per line, e.g. \"Dec 24: Christmas movie marathon\". Monthly runs turn these into overrides."
+    true]])
+
+(defn- guidance->draft [g]
+  (let [g (if (map? g) g {})]
+    {:strategic_guidance (or (:strategic_guidance g) "")
+     :quarterly_theme    (or (:quarterly_theme g) "")
+     :monthly_theme      (or (:monthly_theme g) "")
+     :planned_events     (str/join "\n" (:planned_events g))}))
+
+(defn- draft->guidance [d]
+  {:strategic_guidance (str/trim (:strategic_guidance d))
+   :quarterly_theme    (str/trim (:quarterly_theme d))
+   :monthly_theme      (str/trim (:monthly_theme d))
+   :planned_events     (->> (str/split-lines (:planned_events d))
+                            (map str/trim)
+                            (remove str/blank?)
+                            vec)})
+
+(defn- guidance-empty? [g]
+  (not (and (map? g)
+            (or (seq (:strategic_guidance g)) (seq (:quarterly_theme g))
+                (seq (:monthly_theme g)) (seq (:planned_events g))))))
+
 (defn- channel-guidance-card
-  "View and edit a channel's strategic scheduling guidance — free text fed to
-   the scheduler's playout planner. Loads lazily on first render for the channel;
-   like the media-detail context editors, the editor is always offered even when
-   nothing is stored yet or the load failed."
+  "View and edit a channel's scheduling guidance — the operator input Tunarr
+   Scheduler feeds to Tunabrain: standing strategic guidance, quarterly and
+   monthly themes, and planned events. Loads lazily on first render for the
+   channel; the editor is always offered even when nothing is stored yet or
+   the load failed."
   [_]
   (let [editing? (r/atom false)
-        draft    (r/atom "")]
+        draft    (r/atom (guidance->draft nil))]
     (fn [channel]
       (let [slug    (channel-guidance-slug channel)
             wrapper @(rf/subscribe [::subs/channel-guidance slug])
             state   @(rf/subscribe [::subs/action-state [:channel-guidance slug]])
-            saving? (= :loading (:status state))
-            value   (when (map? wrapper) (:guidance wrapper))]
+            saving? (= :loading (:status state))]
         ;; Trigger the load once (guarded on nil so this doesn't re-dispatch).
         (when (and slug (nil? wrapper))
           (rf/dispatch [::events/load-channel-guidance slug]))
-        (let [start-edit (fn [] (reset! draft (or value "")) (reset! editing? true))
+        (let [start-edit (fn [] (reset! draft (guidance->draft wrapper)) (reset! editing? true))
               save       (fn []
-                           (rf/dispatch [::events/set-channel-guidance slug (str/trim @draft)])
+                           (rf/dispatch [::events/set-channel-guidance slug (draft->guidance @draft)])
                            (reset! editing? false))]
           [card {}
-           [card-content {:class "pt-6 space-y-2"}
+           [card-content {:class "pt-6 space-y-3"}
             [:div {:class "flex items-center justify-between gap-2"}
              [:div {:class "flex items-center gap-2"}
-              [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"}
-               "Scheduling guidance"]
+              [section-label "Scheduling guidance"]
               (case (:status state)
                 :loading [:span {:class "text-xs text-muted-foreground"} "Saving…"]
                 :success [:span {:class "text-xs text-primary"} "Saved ✓"]
                 :error   [:span {:class "text-xs text-destructive"} (or (:message state) "Error")]
                 nil)]
              (when (and slug (not @editing?))
-               [:div {:class "flex gap-1.5"}
-                [button {:size :sm :variant :outline :on-click start-edit}
-                 (if (seq value) "Edit" "Add")]
-                (when (seq value)
-                  [button {:size     :sm
-                           :variant  :ghost
-                           :disabled saving?
-                           :on-click #(rf/dispatch [::events/set-channel-guidance slug ""])}
-                   "Clear"])])]
+               [button {:size :sm :variant :outline :on-click start-edit}
+                (if (guidance-empty? wrapper) "Add" "Edit")])]
             (cond
               (nil? slug)
               [:p {:class "text-sm text-muted-foreground"}
                "This channel has no name to key guidance by."]
 
               @editing?
-              [:div {:class "space-y-2"}
-               [:textarea {:class       guidance-textarea-class
-                           :rows        4
-                           :placeholder "e.g. Air Seinfeld at least twice a week in the evening (primetime). Keep adult content out of the daytime — after 22:00 only."
-                           :value       @draft
-                           :disabled    saving?
-                           :on-change   #(reset! draft (.. % -target -value))}]
+              [:div {:class "space-y-3"}
+               (for [[k label hint multiline?] guidance-field-meta]
+                 ^{:key k}
+                 [:label {:class "block space-y-1"}
+                  [:span {:class "text-xs font-medium"} label]
+                  (if multiline?
+                    [:textarea {:class       guidance-textarea-class
+                                :rows        (if (= k :strategic_guidance) 4 3)
+                                :placeholder hint
+                                :value       (get @draft k)
+                                :disabled    saving?
+                                :on-change   #(swap! draft assoc k (.. % -target -value))}]
+                    [:input {:class       text-input-class
+                             :type        "text"
+                             :placeholder hint
+                             :value       (get @draft k)
+                             :disabled    saving?
+                             :on-change   #(swap! draft assoc k (.. % -target -value))}])])
                [:div {:class "flex gap-2"}
                 [button {:size :sm :disabled saving? :on-click save} "Save"]
                 [button {:size :sm :variant :ghost :on-click #(reset! editing? false)} "Cancel"]]]
@@ -480,12 +529,114 @@
               (or (nil? wrapper) (= :loading wrapper))
               [:p {:class "text-sm text-muted-foreground"} "Loading guidance…"]
 
-              (seq value)
-              [:p {:class "text-sm whitespace-pre-wrap break-words leading-relaxed"} value]
+              (guidance-empty? wrapper)
+              [:p {:class "text-sm text-muted-foreground"}
+               "No guidance set. Add guidance, themes or planned events to steer how this channel is scheduled."]
 
               :else
-              [:p {:class "text-sm text-muted-foreground"}
-               "No guidance set. Add strategic guidance to steer how this channel is scheduled."])]])))))
+              [:div {:class "space-y-2"}
+               (for [[k label _ _] guidance-field-meta
+                     :let [v (get wrapper k)]
+                     :when (seq v)]
+                 ^{:key k}
+                 [:div
+                  [:div {:class "text-xs font-medium text-muted-foreground"} label]
+                  (if (sequential? v)
+                    [:ul {:class "text-sm list-disc pl-5"}
+                     (for [[i e] (map-indexed vector v)] ^{:key i} [:li e])]
+                    [:p {:class "text-sm whitespace-pre-wrap break-words leading-relaxed"} v])])])]])))))
+
+;; ── Scheduling pipeline ─────────────────────────────────────────────────────
+;; On-demand runs of each stage Tunarr Scheduler's crons normally drive:
+;; quarterly grid → monthly overrides → daily horizon extension, plus PV's hard
+;; reset. See the "Channel scheduling pipeline" notes in marquee.events.
+
+(defn- period-select
+  "A <select> over `options` (each {:key .. :label ..}); `selected` is the
+  selected option's :key and `on-select` gets the chosen option."
+  [options selected on-select]
+  [:select {:class     select-class
+            :value     selected
+            :on-change (fn [e]
+                         (let [v (.. e -target -value)]
+                           (on-select (some #(when (= v (:key %)) %) options))))}
+   (for [{k :key label :label} options]
+     ^{:key k} [:option {:value k} label])])
+
+(defn- quarter-options []
+  (let [cur (periods/current-quarter)
+        nxt (periods/next-quarter)]
+    [(assoc cur :key (periods/quarter-key cur) :label (str (:label cur) " (current)"))
+     (assoc nxt :key (periods/quarter-key nxt) :label (str (:label nxt) " (next)"))]))
+
+(defn- month-options []
+  (let [cur (periods/current-month)
+        nxt (periods/next-month)]
+    [(assoc cur :key (:month cur) :label (str (:label cur) " (this month)"))
+     (assoc nxt :key (:month nxt) :label (str (:label nxt) " (next month)"))]))
+
+(defn- pipeline-row [title help & controls]
+  [:div {:class "flex items-start justify-between gap-4 flex-wrap py-3 border-t first:border-0 first:pt-0"}
+   [:div {:class "min-w-0 flex-1 basis-64"}
+    [:div {:class "text-sm font-medium"} title]
+    [:p {:class "text-xs text-muted-foreground"} help]]
+   (into [:div {:class "flex items-start gap-2 flex-wrap"}] controls)])
+
+(defn- reset-playout-button
+  "PV's hard rebuild (from now): wipes the future timeline and restarts
+  rotation. Two-step so it isn't confused with Extend Schedule."
+  [_]
+  (let [armed? (r/atom false)]
+    (fn [{:keys [channel-id playout-job]}]
+      (if @armed?
+        [:div {:class "flex items-center gap-1"}
+         [button {:size :sm :variant :destructive
+                  :on-click (fn []
+                              (reset! armed? false)
+                              (rf/dispatch [::events/trigger-rebuild-playout channel-id]))}
+          "Confirm reset"]
+         [button {:size :sm :variant :ghost :on-click #(reset! armed? false)} "Cancel"]]
+        [action-btn {:action-key [:rebuild-playout channel-id]
+                     :label      (if playout-job "Generating…" "Reset Playout")
+                     :disabled   (boolean playout-job)
+                     :on-click   #(reset! armed? true)}]))))
+
+(defn- channel-pipeline-card [_]
+  (let [quarter (r/atom (first (quarter-options)))
+        ;; Next month is the useful default: overrides only land past the
+        ;; already-built 14-day horizon, and it's what the monthly cron runs.
+        month   (r/atom (second (month-options)))]
+    (fn [channel playout-job]
+      (let [slug (channel-guidance-slug channel)
+            next-q? (= (:key @quarter) (:key (second (quarter-options))))]
+        [card {}
+         [card-content {:class "pt-6 space-y-2"}
+          [section-label "Schedule pipeline"]
+          (if (nil? slug)
+            [:p {:class "text-sm text-muted-foreground"}
+             "This channel has no name to key its schedule by."]
+            [:div
+             [pipeline-row "1. Quarterly grid"
+              (if next-q?
+                "Freeze only: the grid is stored for review and applied by the 1st-of-quarter run. Freeze it before the 10th so next month's overrides can be built on it."
+                "Propose, check and freeze this quarter's grid, then apply it to the playout from the end of the already-built timeline.")
+              [period-select (quarter-options) (:key @quarter) #(reset! quarter %)]
+              [action-btn {:action-key [:regenerate-quarterly slug]
+                           :label      "Generate"
+                           :on-click   #(rf/dispatch [::events/trigger-regenerate-quarterly slug @quarter])}]]
+             [pipeline-row "2. Monthly overrides"
+              "Propose date-specific overrides on top of the month's quarterly grid and re-sync the playout. Overrides only take effect beyond the 14 days already built."
+              [period-select (month-options) (:key @month) #(reset! month %)]
+              [action-btn {:action-key [:regenerate-monthly slug]
+                           :label      "Generate"
+                           :on-click   #(rf/dispatch [::events/trigger-regenerate-monthly slug @month])}]]
+             [pipeline-row "3. Daily timeline"
+              "Extend fills the timeline out to 14 days, keeping what's already scheduled. Reset throws away the future timeline and rebuilds it from now, restarting rotation."
+              [action-btn {:action-key [:extend-schedule slug]
+                           :label      "Extend Schedule"
+                           :on-click   #(rf/dispatch [::events/trigger-extend-schedule slug (:id channel)])}]
+              (when (:id channel)
+                [reset-playout-button {:channel-id (:id channel) :playout-job playout-job}])]])]]))))
 
 ;; ── Quarterly outline ─────────────────────────────────────────────────────
 ;; Read-only view of the frozen daypart skeleton + rotation strips Tunarr
@@ -606,69 +757,146 @@
               [(:days (first ss))
                (sort-by #(broadcast-minutes (:start %) broadcast-start) ss)]))))
 
+(defn- plan-card-header
+  "Header row shared by the outline and overrides cards: title, period
+  selector, then any status bits and a Refresh button."
+  [title selector & extras]
+  [:div {:class "flex items-center justify-between gap-2 flex-wrap"}
+   [:div {:class "flex items-center gap-2 flex-wrap"}
+    [section-label title]
+    selector]
+   (into [:div {:class "flex items-center gap-2 flex-wrap"}] extras)])
+
 (defn- channel-quarterly-outline [_]
-  (fn [channel]
-    (let [slug (channel-guidance-slug channel)
-          grid @(rf/subscribe [::subs/channel-grid slug])]
-      (when (and slug (nil? grid))
-        (rf/dispatch [::events/load-channel-grid slug]))
-      [card {}
-       [card-content {:class "pt-6 space-y-3"}
-        [:div {:class "flex items-center justify-between gap-2 flex-wrap"}
-         [:span {:class "text-xs font-medium uppercase tracking-wide text-muted-foreground"}
-          "Quarterly outline"]
-         (when (map? grid)
-           [:div {:class "flex items-center gap-2"}
-            [:span {:class "text-xs text-muted-foreground"} (str (:quarter grid) " " (:year grid))]
-            (when-let [fs (get-in grid [:feasibility :overall_status])]
-              [feasibility-badge fs])
-            [button {:size :sm :variant :ghost
-                     :on-click #(rf/dispatch [::events/reload-channel-grid slug])}
-             "Refresh"]])]
-        (cond
-          (nil? slug)
-          [:p {:class "text-sm text-muted-foreground"}
-           "This channel has no name to key its schedule by."]
+  (let [quarter (r/atom (first (quarter-options)))]
+    (fn [channel]
+      (let [slug (channel-guidance-slug channel)
+            q    @quarter
+            grid @(rf/subscribe [::subs/channel-grid slug (periods/quarter-key q)])
+            refresh #(rf/dispatch [::events/reload-channel-grid slug q])]
+        (when (and slug (nil? grid))
+          (rf/dispatch [::events/load-channel-grid slug q]))
+        [card {}
+         [card-content {:class "pt-6 space-y-3"}
+          [plan-card-header "Quarterly outline"
+           [period-select (quarter-options) (:key q) #(reset! quarter %)]
+           (when (map? grid)
+             [:span {:class "text-xs text-muted-foreground"}
+              (str "v" (:version grid)
+                   (when-let [c (:created-at grid)]
+                     (str " · frozen " (subs (str c) 0 (min 10 (count (str c))))))))])
+           (when-let [fs (and (map? grid) (get-in grid [:feasibility :overall_status]))]
+             [feasibility-badge fs])
+           (when slug
+             [button {:size :sm :variant :ghost :on-click refresh} "Refresh"])]
+          (cond
+            (nil? slug)
+            [:p {:class "text-sm text-muted-foreground"}
+             "This channel has no name to key its schedule by."]
 
-          (= grid :loading)
-          [:p {:class "text-sm text-muted-foreground"} "Loading outline…"]
+            (or (nil? grid) (= grid :loading))
+            [:p {:class "text-sm text-muted-foreground"} "Loading outline…"]
 
-          (false? grid)
-          [:div {:class "space-y-2"}
-           [:p {:class "text-sm text-muted-foreground"}
-            "No quarterly schedule generated yet. Run Regenerate Quarterly to build one."]
-           [button {:size :sm :variant :outline
-                    :on-click #(rf/dispatch [::events/reload-channel-grid slug])}
-            "Check again"]]
+            (false? grid)
+            [:p {:class "text-sm text-muted-foreground"}
+             (str "No grid frozen for " (:label q)
+                  " yet. Generate one in the Schedule pipeline above.")]
 
-          :else
-          (let [blocks (get-in grid [:grid :skeleton :blocks])
-                strips (get-in grid [:grid :strips])
-                notes  (get-in grid [:feasibility :notes])]
-            [:div {:class "space-y-4"}
-             [:div
-              [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Dayparts"]
-              (if (seq blocks)
-                (for [[i b] (map-indexed vector blocks)]
-                  ^{:key i} [outline-daypart-row b])
-                [:p {:class "text-sm text-muted-foreground"} "No daypart skeleton stored."])]
-             [:div
-              [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Rotation strips"]
-              (if (seq strips)
-                (let [bstart (get-in grid [:grid :broadcast_day_start])]
-                  (for [[days ss] (outline-strip-groups strips bstart)]
-                    ^{:key (str (days-group-key days))}
-                    [:div {:class "mb-3 last:mb-0"}
-                     [:div {:class "text-xs font-medium text-foreground mb-0.5"}
-                      (outline-days-label days)]
-                     (for [s ss]
-                       ^{:key (:strip_id s)} [outline-strip-row s])]))
-                [:p {:class "text-sm text-muted-foreground"} "No rotation strips stored."])]
-             (when (seq notes)
+            :else
+            (let [blocks (get-in grid [:grid :skeleton :blocks])
+                  strips (get-in grid [:grid :strips])
+                  notes  (get-in grid [:feasibility :notes])]
+              [:div {:class "space-y-4"}
                [:div
-                [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Feasibility notes"]
-                (for [[i n] (map-indexed vector notes)]
-                  ^{:key i} [:p {:class "text-xs text-muted-foreground"} n])])]))]])))
+                [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Dayparts"]
+                (if (seq blocks)
+                  (for [[i b] (map-indexed vector blocks)]
+                    ^{:key i} [outline-daypart-row b])
+                  [:p {:class "text-sm text-muted-foreground"} "No daypart skeleton stored."])]
+               [:div
+                [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Rotation strips"]
+                (if (seq strips)
+                  (let [bstart (get-in grid [:grid :broadcast_day_start])]
+                    (for [[days ss] (outline-strip-groups strips bstart)]
+                      ^{:key (str (days-group-key days))}
+                      [:div {:class "mb-3 last:mb-0"}
+                       [:div {:class "text-xs font-medium text-foreground mb-0.5"}
+                        (outline-days-label days)]
+                       (for [s ss]
+                         ^{:key (:strip_id s)} [outline-strip-row s])]))
+                  [:p {:class "text-sm text-muted-foreground"} "No rotation strips stored."])]
+               (when (seq notes)
+                 [:div
+                  [:h3 {:class "text-xs font-semibold text-muted-foreground mb-1"} "Feasibility notes"]
+                  (for [[i n] (map-indexed vector notes)]
+                    ^{:key i} [:p {:class "text-xs text-muted-foreground"} n])])]))]]))))
+
+;; ── Monthly overrides ───────────────────────────────────────────────────────
+;; Read-only view of the date-bounded exceptions layered over the quarterly
+;; grid for one month (each plays in place of the strips it overlaps).
+
+(defn- override-when
+  "Human-readable scope: a single date, or a day pattern with its window."
+  [{:keys [date days effective_start effective_end]}]
+  (if date
+    (.toLocaleDateString (js/Date. (str date "T00:00:00")) js/undefined
+                         #js {:weekday "short" :month "short" :day "numeric"})
+    (str (outline-days-label (or days "daily"))
+         (when (or effective_start effective_end)
+           (str " · " (or effective_start "…") " → " (or effective_end "…"))))))
+
+(defn- override-sort-key [{:keys [scope start]}]
+  [(or (:date scope) (:effective_start scope) "") (or start "")])
+
+(defn- override-row [{:keys [scope start end content priority note]}]
+  [:div {:class "py-1.5 text-sm border-t first:border-0 space-y-0.5"}
+   [:div {:class "flex items-baseline gap-3 flex-wrap"}
+    [:span {:class "text-xs text-muted-foreground w-40 shrink-0"} (override-when scope)]
+    [:span {:class "font-mono text-xs text-muted-foreground"} (str start "–" end)]
+    [outline-content content]
+    (when (and priority (not (zero? priority)))
+      [:span {:class "text-xs text-muted-foreground"} (str "priority " priority)])]
+   (when (seq note)
+     [:p {:class "text-xs text-muted-foreground"} note])])
+
+(defn- channel-monthly-overrides [_]
+  (let [month (r/atom (first (month-options)))]
+    (fn [channel]
+      (let [slug (channel-guidance-slug channel)
+            m    @month
+            rec  @(rf/subscribe [::subs/channel-overrides slug (:month m)])
+            refresh #(rf/dispatch [::events/reload-channel-overrides slug (:month m)])]
+        (when (and slug (nil? rec))
+          (rf/dispatch [::events/load-channel-overrides slug (:month m)]))
+        [card {}
+         [card-content {:class "pt-6 space-y-3"}
+          [plan-card-header "Monthly overrides"
+           [period-select (month-options) (:key m) #(reset! month %)]
+           (when (map? rec)
+             [:span {:class "text-xs text-muted-foreground"} (str "v" (:version rec))])
+           (when slug
+             [button {:size :sm :variant :ghost :on-click refresh} "Refresh"])]
+          (cond
+            (nil? slug)
+            [:p {:class "text-sm text-muted-foreground"}
+             "This channel has no name to key its schedule by."]
+
+            (or (nil? rec) (= rec :loading))
+            [:p {:class "text-sm text-muted-foreground"} "Loading overrides…"]
+
+            (false? rec)
+            [:p {:class "text-sm text-muted-foreground"}
+             (str "No overrides generated for " (:label m)
+                  ". Generate them in the Schedule pipeline above (needs that month's quarterly grid).")]
+
+            (empty? (:overrides rec))
+            [:p {:class "text-sm text-muted-foreground"}
+             (str "No overrides for " (:label m) ": every day follows the quarterly grid.")]
+
+            :else
+            [:div
+             (for [o (sort-by override-sort-key (:overrides rec))]
+               ^{:key (:override_id o)} [override-row o])])]]))))
 
 (defn channel-page []
   (let [channel     @(rf/subscribe [::subs/current-channel])
@@ -679,7 +907,6 @@
         pv-url      @(rf/subscribe [::subs/pseudovision-url])
         playout-job @(rf/subscribe [::subs/channel-playout-job (:id channel)])
         stream-url  (channel-stream-url pv-url (:uuid channel))
-        slug        (channel-guidance-slug channel)
         entries     (->> (or raw-events [])
                          (keep #(event->display % media-items))
                          (sort-by :start-ms))]
@@ -692,27 +919,8 @@
          [:p {:class "text-muted-foreground"} (:description channel)])]
       [:div {:class "flex items-center gap-2 flex-wrap"}
        [ffmpeg-profile-selector channel]
-       ;; The generation pipeline, in order: quarterly → monthly → daily →
-       ;; playout. Each stage can be re-run independently on demand.
-       (when slug
-         [action-btn {:action-key [:regenerate-quarterly slug]
-                      :label      "Regenerate Quarterly"
-                      :on-click   #(rf/dispatch [::events/trigger-regenerate-quarterly slug])}])
-       (when slug
-         [action-btn {:action-key [:regenerate-monthly slug]
-                      :label      "Regenerate Monthly"
-                      :on-click   #(rf/dispatch [::events/trigger-regenerate-monthly slug])}])
-       (when slug
-         [action-btn {:action-key [:extend-schedule slug]
-                      :label      "Extend Schedule"
-                      :on-click   #(rf/dispatch [::events/trigger-extend-schedule slug (:id channel)])}])
-       (when (:id channel)
-         [action-btn {:action-key [:rebuild-playout (:id channel)]
-                      :label      (if playout-job "Generating…" "Rebuild Playout")
-                      :disabled   (boolean playout-job)
-                      :on-click   #(rf/dispatch [::events/trigger-rebuild-playout (:id channel)])}])
        (when (seq channels)
-         [:select {:class     "flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+         [:select {:class     select-class
                    :value     (or (:id channel) "")
                    :on-change #(rf/dispatch [::events/navigate-to-channel
                                              (js/parseInt (.. % -target -value))])}
@@ -727,11 +935,19 @@
      (when playout-job
        [playout-generating-banner playout-job])
 
+     ;; Keyed by channel so the period selectors and edit state reset when
+     ;; switching channels.
      (when channel
-       [channel-guidance-card channel])
+       ^{:key (str "pipeline-" (:id channel))} [channel-pipeline-card channel playout-job])
 
      (when channel
-       [channel-quarterly-outline channel])
+       ^{:key (str "guidance-" (:id channel))} [channel-guidance-card channel])
+
+     (when channel
+       ^{:key (str "outline-" (:id channel))} [channel-quarterly-outline channel])
+
+     (when channel
+       ^{:key (str "overrides-" (:id channel))} [channel-monthly-overrides channel])
 
      (cond
        loading?

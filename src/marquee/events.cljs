@@ -2,7 +2,8 @@
   (:require [clojure.string]
             [re-frame.core :as rf]
             [martian.re-frame :as martian]
-            [marquee.routes :as routes]))
+            [marquee.routes :as routes]
+            [marquee.lib.periods :as periods]))
 
 ;; Each pushed entry carries a `marquee-idx` — its depth from the entry the app
 ;; was first loaded on (stamped 0 by `stamp-history-root!` at init). It lets the
@@ -1632,35 +1633,47 @@
    (action-error-fx [:set-ffmpeg-profile channel-id] {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
-;; Channel strategic guidance
+;; Channel scheduling guidance
 ;;
-;; Free-text scheduling guidance the operator sets per channel; Tunarr Scheduler
-;; feeds it to whatever builds the channel's playout. Keyed in the scheduler by
-;; the channel's slug — its lower-cased name (e.g. "Spectrum" → "spectrum") —
-;; which is also the {channel} path segment:
-;;   GET /api/scheduling/channels/{channel}/guidance → {:strategic_guidance "..."}
-;;   PUT /api/scheduling/channels/{channel}/guidance   {:strategic_guidance "..."}
-;; Reads/writes go straight to the BFF (not martian): the endpoint isn't in the
-;; generated client, and a plain fetch keeps the JSON key exactly as the
-;; scheduler expects (snake_case, not martian's kebab-case coercion).
+;; Per-channel operator guidance that Tunarr Scheduler feeds to Tunabrain when
+;; it proposes the quarterly grid and monthly overrides. Keyed in the scheduler
+;; by the channel's slug — its lower-cased name (e.g. "Spectrum" → "spectrum"),
+;; which TS matches against the display name case-insensitively:
+;;   GET /api/scheduling/channels/{channel}/guidance
+;;     → {:strategic_guidance "..." :quarterly_theme "..." :monthly_theme "..."
+;;        :planned_events ["..."]}
+;;   PUT /api/scheduling/channels/{channel}/guidance  (same keys; absent keys
+;;     are left unchanged)
+;; Reads/writes go straight to the BFF (not martian): a plain fetch keeps the
+;; JSON keys exactly as the scheduler expects (snake_case, not martian's
+;; kebab-case coercion).
 ;;
 ;; Cache shape under [:channel-guidance slug]:
-;;   absent                → never requested
-;;   :loading              → GET in flight
-;;   false                 → load failed
-;;   {:guidance <str|nil>} → loaded (:guidance nil when none is set yet)
+;;   absent   → never requested
+;;   :loading → GET in flight
+;;   false    → load failed
+;;   {...}    → loaded: {:strategic_guidance <str|nil> :quarterly_theme <str|nil>
+;;               :monthly_theme <str|nil> :planned_events [<str>]}
 ;; ---------------------------------------------------------------------------
+
+(def guidance-fields
+  "The editable guidance keys, as TS names them."
+  [:strategic_guidance :quarterly_theme :monthly_theme :planned_events])
 
 (defn- channel-guidance-url [channel-slug]
   (str "/api/tunarr-scheduler/api/scheduling/channels/"
        (js/encodeURIComponent channel-slug) "/guidance"))
 
-(defn- guidance-from-body [body]
-  ;; ::fetch-json keywordizes the raw JSON verbatim, so the snake_case key
-  ;; survives as :strategic_guidance; tolerate a couple of plausible shapes.
-  (or (:strategic_guidance body)
-      (:strategic-guidance body)
-      (get-in body [:guidance :strategic_guidance])))
+(defn- guidance-from-body
+  "Normalise a guidance GET body to the cached shape. ::fetch-json keywordizes
+   the raw JSON verbatim, so snake_case keys survive; tolerate a nested
+   {:guidance {...}} too."
+  [body]
+  (let [g (if (map? (:guidance body)) (:guidance body) body)]
+    {:strategic_guidance (not-empty (or (:strategic_guidance g) (:strategic-guidance g)))
+     :quarterly_theme    (not-empty (:quarterly_theme g))
+     :monthly_theme      (not-empty (:monthly_theme g))
+     :planned_events     (vec (remove clojure.string/blank? (:planned_events g)))}))
 
 (rf/reg-event-fx
  ::load-channel-guidance
@@ -1678,7 +1691,7 @@
 (rf/reg-event-db
  ::load-channel-guidance-success
  (fn [db [_ channel-slug body]]
-   (assoc-in db [:channel-guidance channel-slug] {:guidance (guidance-from-body body)})))
+   (assoc-in db [:channel-guidance channel-slug] (guidance-from-body body))))
 
 (rf/reg-event-db
  ::load-channel-guidance-failure
@@ -1690,24 +1703,28 @@
 
 (rf/reg-event-fx
  ::set-channel-guidance
+ ;; `guidance` is a map with any of `guidance-fields`; the strings are sent
+ ;; as-is ("" clears a field) and :planned_events as a vector of strings.
  (fn [{:keys [db]} [_ channel-slug guidance]]
-   (let [k [:channel-guidance channel-slug]]
+   (let [k    [:channel-guidance channel-slug]
+         body (select-keys guidance guidance-fields)]
      {:db           (assoc-in db [:action-states k] {:status :loading})
       ::http-mutate {:url        (channel-guidance-url channel-slug)
                      :method     "PUT"
-                     :body       {:strategic_guidance guidance}
-                     :on-success [::store-channel-guidance channel-slug k
-                                  (if (seq guidance) "Guidance saved" "Guidance cleared")
-                                  guidance]
+                     :body       body
+                     :on-success [::store-channel-guidance channel-slug k body]
                      :on-failure [::change-channel-guidance-failure k]}})))
 
 (rf/reg-event-fx
  ::store-channel-guidance
- (fn [{:keys [db]} [_ channel-slug k message guidance _response]]
-   ;; The value we sent is authoritative; store it directly so the view updates
-   ;; without a follow-up GET (the PUT response shape isn't relied upon).
-   (assoc (action-success-fx k message)
-          :db (assoc-in db [:channel-guidance channel-slug] {:guidance (not-empty guidance)}))))
+ (fn [{:keys [db]} [_ channel-slug k sent _response]]
+   ;; The values we sent are authoritative; merge them over the cached record so
+   ;; the view updates without a follow-up GET (the PUT response shape isn't
+   ;; relied upon).
+   (let [prev (let [g (get-in db [:channel-guidance channel-slug])] (if (map? g) g {}))]
+     (assoc (action-success-fx k "Guidance saved")
+            :db (assoc-in db [:channel-guidance channel-slug]
+                          (guidance-from-body (merge prev sent)))))))
 
 (rf/reg-event-fx
  ::change-channel-guidance-failure
@@ -1716,54 +1733,67 @@
    (action-error-fx k {:body {:message error}})))
 
 ;; ---------------------------------------------------------------------------
-;; Channel scheduling regeneration (quarterly → monthly → daily → playout)
+;; Channel scheduling pipeline (quarterly → monthly → daily → playout)
 ;;
 ;; Tunarr Scheduler's periodic tasks are normally triggered by k8s CronJobs
-;; (see its deploy/k8s), but operators need to re-run any stage on demand —
-;; e.g. after editing guidance, or to recover from a bad LLM proposal. All
-;; three POST endpoints accept an optional repeatable ?channel=<selector> to
-;; scope the run to one channel (omitting it runs every configured channel);
-;; we always pass the current channel's slug, the same lower-cased-name
-;; identifier already used for strategic guidance (TS matches it against the
-;; channel's display name case-insensitively).
+;; (quarterly on the 1st of Jan/Apr/Jul/Oct, monthly on the 10th for NEXT
+;; month, daily at 03:00), but operators need to re-run any stage on demand —
+;; e.g. after editing guidance, or to recover from a bad LLM proposal. Each
+;; POST takes a repeatable ?channel=<selector>; we always pass the current
+;; channel's slug, the same identifier used for guidance.
 ;;
-;; Quarterly and monthly are heavy LLM-backed jobs and return 202 + a job id,
-;; tracked like any other job on the Jobs page (source :tunarr-scheduler,
-;; type :media/scheduling-quarterly / :media/scheduling-monthly). Daily
-;; extends the channel's PV timeline to the 14-day horizon without resetting
-;; it (PV rebuild from=horizon, so rotation and near-term events are kept).
-;; It has no LLM call; it may answer 200 with per-channel results or 202 with
-;; a :media/scheduling-daily job, and either way the PV rebuild it starts
-;; shows up as the channel's playout job. (The old weekly DailySlots push and
-;; its /api/scheduling/weekly endpoint were removed in tunarr-scheduler#130.)
-;; As with guidance, these go straight to the BFF rather than through
-;; martian: the endpoints take no body, so there's nothing for martian's
-;; query-schema coercion to drop, but a plain fetch keeps this consistent
-;; with the rest of the scheduling API.
+;; Quarterly and monthly also take ?date=YYYY-MM-DD selecting the target
+;; period (see marquee.lib.periods):
+;;   - quarterly for the CURRENT quarter freezes the grid and syncs it to PV;
+;;     for a FUTURE quarter it freezes only (PV schedules have no effective
+;;     date), and the 1st-of-quarter run applies it. Pre-freezing next quarter
+;;     before the 10th of its preceding month is also what lets that month's
+;;     monthly run produce overrides for the quarter's first month.
+;;   - monthly stores overrides for the month and re-syncs PV. Overrides only
+;;     land past the already-built 14-day horizon, so next month is the
+;;     useful default (it's what the cron does).
+;; Quarterly and monthly are heavy LLM-backed jobs (202 + job id, type
+;; :media/scheduling-quarterly / :media/scheduling-monthly on the Jobs page).
+;;
+;; Daily extends the channel's PV timeline to the 14-day horizon without
+;; resetting it (PV rebuild from=horizon, so rotation and near-term events are
+;; kept). It has no LLM call and returns 202 + a :media/scheduling-daily job;
+;; the PV rebuild it starts shows up as the channel's playout job. (The old
+;; weekly DailySlots push and /api/scheduling/weekly were removed in
+;; tunarr-scheduler#130.)
+;;
+;; These go straight to the BFF rather than through martian, like guidance.
 ;; ---------------------------------------------------------------------------
 
-(defn- scheduling-task-url [task channel-slug]
-  (str "/api/tunarr-scheduler/api/scheduling/" (name task)
-       "?channel=" (js/encodeURIComponent channel-slug)))
+(defn- scheduling-task-url
+  ([task channel-slug] (scheduling-task-url task channel-slug nil))
+  ([task channel-slug date]
+   (str "/api/tunarr-scheduler/api/scheduling/" (name task)
+        "?channel=" (js/encodeURIComponent channel-slug)
+        (when date (str "&date=" (js/encodeURIComponent date))))))
 
 (rf/reg-event-fx
  ::trigger-regenerate-quarterly
- (fn [{:keys [db]} [_ channel-slug]]
+ ;; `quarter` is a marquee.lib.periods quarter map; nil means the current one.
+ (fn [{:keys [db]} [_ channel-slug quarter]]
    (let [k [:regenerate-quarterly channel-slug]]
      {:db           (assoc-in db [:action-states k] {:status :loading})
-      ::http-mutate {:url        (scheduling-task-url :quarterly channel-slug)
+      ::http-mutate {:url        (scheduling-task-url :quarterly channel-slug (:date quarter))
                      :method     "POST"
-                     :on-success [::regenerate-scheduling-success k "Quarterly regeneration started"]
+                     :on-success [::regenerate-scheduling-success k
+                                  (str (or (:label quarter) "Quarterly") " generation started")]
                      :on-failure [::regenerate-scheduling-failure k]}})))
 
 (rf/reg-event-fx
  ::trigger-regenerate-monthly
- (fn [{:keys [db]} [_ channel-slug]]
+ ;; `month` is a marquee.lib.periods month map; nil means the current one.
+ (fn [{:keys [db]} [_ channel-slug month]]
    (let [k [:regenerate-monthly channel-slug]]
      {:db           (assoc-in db [:action-states k] {:status :loading})
-      ::http-mutate {:url        (scheduling-task-url :monthly channel-slug)
+      ::http-mutate {:url        (scheduling-task-url :monthly channel-slug (:date month))
                      :method     "POST"
-                     :on-success [::regenerate-scheduling-success k "Monthly regeneration started"]
+                     :on-success [::regenerate-scheduling-success k
+                                  (str (or (:label month) "Monthly") " overrides started")]
                      :on-failure [::regenerate-scheduling-failure k]}})))
 
 (rf/reg-event-fx
@@ -1797,57 +1827,106 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Quarterly grid ("outline") — read-only view of the frozen daypart skeleton
-;; and rotation strips Tunabrain generated for a channel's current quarter,
-;; plus the feasibility snapshot it was frozen against. Defaults server-side
-;; to the current quarter/year.
+;; and rotation strips Tunabrain generated for a channel's quarter, plus the
+;; feasibility snapshot it was frozen against.
+;;   GET /api/scheduling/channels/{channel}/grid?quarter=Q1&year=2027
 ;;
-;; Cache shape under [:channel-grid slug]:
-;;   absent  → never requested
+;; Cache shape under [:channel-grid slug "Q1-2027"] (periods/quarter-key):
+;;   absent   → never requested
 ;;   :loading → GET in flight
-;;   false   → no frozen grid yet, or the load failed (the endpoint 404s until
-;;             the first quarterly run freezes one — same quiet-failure
-;;             handling as channel guidance, since the common case is simply
-;;             "nothing generated yet")
-;;   {...}   → the GridRecord body: {:channel :quarter :year :version :status
-;;             :grid {:skeleton {:blocks [...]} :strips [...]} :feasibility}
+;;   false    → no frozen grid for that quarter, or the load failed (the
+;;              endpoint 404s until a quarterly run freezes one — same quiet
+;;              failure handling as guidance, since the common case is simply
+;;              "nothing generated yet")
+;;   {...}    → the GridRecord body: {:channel :quarter :year :version :status
+;;              :created-at :grid {:skeleton {:blocks [...]} :strips [...]}
+;;              :feasibility}
 ;; ---------------------------------------------------------------------------
 
-(defn- channel-grid-url [channel-slug]
+(defn- channel-plan-url [channel-slug path query]
   (str "/api/tunarr-scheduler/api/scheduling/channels/"
-       (js/encodeURIComponent channel-slug) "/grid"))
+       (js/encodeURIComponent channel-slug) "/" path
+       (when (seq query) (str "?" query))))
 
-(defn- fetch-channel-grid [db channel-slug]
-  {:db          (assoc-in db [:channel-grid channel-slug] :loading)
-   ::fetch-json {:url         (channel-grid-url channel-slug)
-                 :keywordize? true
-                 :on-success  [::load-channel-grid-success channel-slug]
-                 :on-failure  [::load-channel-grid-failure channel-slug]}})
+(defn- fetch-channel-grid [db channel-slug {:keys [quarter year] :as q}]
+  (let [qk (periods/quarter-key q)]
+    {:db          (assoc-in db [:channel-grid channel-slug qk] :loading)
+     ::fetch-json {:url         (channel-plan-url channel-slug "grid"
+                                                  (str "quarter=" quarter "&year=" year))
+                   :keywordize? true
+                   :on-success  [::load-channel-grid-success channel-slug qk]
+                   :on-failure  [::load-channel-grid-failure channel-slug qk]}}))
 
 (rf/reg-event-fx
  ::load-channel-grid
- (fn [{:keys [db]} [_ channel-slug]]
-   ;; Loaded lazily once per slug, like guidance; ::reload-channel-grid bypasses
-   ;; this cache guard for an explicit manual refresh.
-   (if (or (nil? channel-slug) (contains? (:channel-grid db) channel-slug))
+ (fn [{:keys [db]} [_ channel-slug quarter]]
+   ;; Loaded lazily once per slug+quarter, like guidance; ::reload-channel-grid
+   ;; bypasses this cache guard for an explicit manual refresh.
+   (if (or (nil? channel-slug) (nil? quarter)
+           (contains? (get-in db [:channel-grid channel-slug]) (periods/quarter-key quarter)))
      {:db db}
-     (fetch-channel-grid db channel-slug))))
+     (fetch-channel-grid db channel-slug quarter))))
 
 (rf/reg-event-fx
  ::reload-channel-grid
- (fn [{:keys [db]} [_ channel-slug]]
-   (when channel-slug
-     (fetch-channel-grid db channel-slug))))
+ (fn [{:keys [db]} [_ channel-slug quarter]]
+   (when (and channel-slug quarter)
+     (fetch-channel-grid db channel-slug quarter))))
 
 (rf/reg-event-db
  ::load-channel-grid-success
- (fn [db [_ channel-slug body]]
-   (assoc-in db [:channel-grid channel-slug] body)))
+ (fn [db [_ channel-slug qk body]]
+   (assoc-in db [:channel-grid channel-slug qk] body)))
 
 (rf/reg-event-db
  ::load-channel-grid-failure
- (fn [db [_ channel-slug error]]
-   (js/console.debug "Could not load quarterly grid for channel" channel-slug ":" error)
-   (assoc-in db [:channel-grid channel-slug] false)))
+ (fn [db [_ channel-slug qk error]]
+   (js/console.debug "Could not load grid for channel" channel-slug qk ":" error)
+   (assoc-in db [:channel-grid channel-slug qk] false)))
+
+;; ---------------------------------------------------------------------------
+;; Monthly overrides — read-only view of the sparse, date-bounded exceptions
+;; Tunabrain layered over the frozen grid for one month. Each override is
+;; {:override_id :scope {:date | :days [:effective_start :effective_end]}
+;;  :start :end :content {:media_id :label ...} :priority :note}.
+;;   GET /api/scheduling/channels/{channel}/overrides?month=YYYY-MM
+;;
+;; Cache shape under [:channel-overrides slug "YYYY-MM"]: same states as the
+;; grid (absent / :loading / false on 404 or failure / the OverridesRecord).
+;; ---------------------------------------------------------------------------
+
+(defn- fetch-channel-overrides [db channel-slug month]
+  {:db          (assoc-in db [:channel-overrides channel-slug month] :loading)
+   ::fetch-json {:url         (channel-plan-url channel-slug "overrides"
+                                                (str "month=" (js/encodeURIComponent month)))
+                 :keywordize? true
+                 :on-success  [::load-channel-overrides-success channel-slug month]
+                 :on-failure  [::load-channel-overrides-failure channel-slug month]}})
+
+(rf/reg-event-fx
+ ::load-channel-overrides
+ (fn [{:keys [db]} [_ channel-slug month]]
+   (if (or (nil? channel-slug) (nil? month)
+           (contains? (get-in db [:channel-overrides channel-slug]) month))
+     {:db db}
+     (fetch-channel-overrides db channel-slug month))))
+
+(rf/reg-event-fx
+ ::reload-channel-overrides
+ (fn [{:keys [db]} [_ channel-slug month]]
+   (when (and channel-slug month)
+     (fetch-channel-overrides db channel-slug month))))
+
+(rf/reg-event-db
+ ::load-channel-overrides-success
+ (fn [db [_ channel-slug month body]]
+   (assoc-in db [:channel-overrides channel-slug month] body)))
+
+(rf/reg-event-db
+ ::load-channel-overrides-failure
+ (fn [db [_ channel-slug month error]]
+   (js/console.debug "Could not load overrides for channel" channel-slug month ":" error)
+   (assoc-in db [:channel-overrides channel-slug month] false)))
 
 ;; ---------------------------------------------------------------------------
 ;; Media tag management
@@ -2180,7 +2259,7 @@
 (rf/reg-event-fx
  ::trigger-rebuild-playout-success
  (fn [_ [_ channel-id _response]]
-   (update (action-success-fx [:rebuild-playout channel-id] "Playout rebuilt")
+   (update (action-success-fx [:rebuild-playout channel-id] "Playout reset started")
            :dispatch-n (fnil conj []) [::poll-channel-playout-job channel-id])))
 
 (rf/reg-event-fx
